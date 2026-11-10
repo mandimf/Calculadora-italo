@@ -14,7 +14,6 @@ SHEET_ID = "1JzqqiSqjuBb7GNaswi-EHKYn7SEOqt0RtYeHvt7ywj0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
 
-@st.cache_data(ttl=600)
 def carregar_dados_ft():
     try:
         df = pd.read_csv(SHEET_URL, on_bad_lines="skip")
@@ -119,7 +118,7 @@ def inicializar_sessao(lista_produtos):
                 "matriz": "Farinha de Vísceras (FVO)",
                 "produto": prod_inicial,
                 "dosagem": 500.0,
-                "preco_kg": 35.0,
+                "preco_kg": 15.0,
                 "share": 100
             },
             {
@@ -127,7 +126,7 @@ def inicializar_sessao(lista_produtos):
                 "matriz": "Óleo de Frango",
                 "produto": prod_inicial,
                 "dosagem": 1000.0,
-                "preco_kg": 38.0,
+                "preco_kg": 18.0,
                 "share": 100
             }
         ]
@@ -171,12 +170,28 @@ def recalcular_balanco():
 
 
 def main():
-    st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria")
-    st.markdown("Suporte técnico-comercial integrado: Balanço de Massa, Consulta de FTs, Dosagem Multi-Ponto (ppm) e Faturamento.")
+    # Controle de Autenticação por Senha
+    if "autenticado" not in st.session_state:
+        st.session_state.autenticado = False
+
+    if not st.session_state.autenticado:
+        st.title("🔒 Autenticação Restrita")
+        st.markdown("Insira a senha de acesso para utilizar o Ecossistema Comercial.")
+        senha_digitada = st.text_input("Senha de Acesso:", type="password")
+        if st.button("Entrar"):
+            if senha_digitada == "cfs2026":
+                st.session_state.autenticado = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta. Tente novamente.")
+        return
+
+    st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria (US$)")
+    st.markdown("Suporte técnico-comercial integrado: Balanço de Massa, Consulta de FTs, Dosagem Multi-Ponto (ppm) e Faturamento em Dólar.")
 
     df_bruto = carregar_dados_ft()
     if df_bruto.empty:
-        st.warning("A base de dados retornou vazia ou inacessível. Verifique se a planilha está pública para leitura.")
+        st.warning("A base de dados retornou vazia ou inacessível. Verifique se a planilha base está pública para leitura.")
         return
 
     df_produtos = ordenar_portfolio(df_bruto)
@@ -193,7 +208,7 @@ def main():
         [
             "1. Balanço de Massa & Produção",
             "2. Consulta de FT & Calculadora de Consumo (ppm)",
-            "3. Simulação de Faturamento & Fechamento"
+            "3. Simulação de Faturamento & Fechamento (US$)"
         ]
     )
 
@@ -352,7 +367,7 @@ def main():
                 "matriz": "Fábrica de Ração",
                 "produto": lista_produtos[0] if lista_produtos else None,
                 "dosagem": 500.0,
-                "preco_kg": 35.0,
+                "preco_kg": 15.0,
                 "share": 100
             })
             st.session_state.next_id += 1
@@ -365,9 +380,9 @@ def main():
         total_kg_geral = df_resumo["Consumo Mensal (kg)"].sum() if not df_resumo.empty else 0.0
         st.success(f"📦 **Volume Físico Total Estimado na Conta:** {total_kg_geral:,.2f} kg / mês")
 
-    elif modulo == "3. Simulação de Faturamento & Fechamento":
-        st.header("Etapa 3: Simulador de Faturamento e Custo por Tonelada Tratada")
-        st.markdown("Defina o preço praticado (R$/kg) e o share pretendido para cada item configurado na Cesta de Tratamento.")
+    elif modulo == "3. Simulação de Faturamento & Fechamento (US$)":
+        st.header("Etapa 3: Simulador de Faturamento e Custo por Tonelada Tratada (US$)")
+        st.markdown("Defina o preço praticado em **Dólares (US$/kg)** e o share pretendido para cada item configurado na Cesta de Tratamento.")
 
         matrizes_opcoes = st.session_state.volumes_producao
         linhas_financeiro = []
@@ -381,7 +396,7 @@ def main():
                 st.markdown(f"**{idx + 1}. {item['produto']}** *(em {item['matriz']})*")
                 st.caption(f"Dosagem: {item['dosagem']:,.0f} g/ton | Demanda 100%: {consumo_kg_100:,.1f} kg/mês")
             with c_fin2:
-                item["preco_kg"] = st.number_input(f"Preço R$/kg (#{idx + 1}):", min_value=0.0, value=float(item.get("preco_kg", 35.0)), step=1.0, key=f"preco_{item['id']}")
+                item["preco_kg"] = st.number_input(f"Preço US$/kg (#{idx + 1}):", min_value=0.0, value=float(item.get("preco_kg", 15.0)), step=0.5, key=f"preco_{item['id']}")
             with c_fin3:
                 item["share"] = st.slider(f"Share % (#{idx + 1}):", min_value=10, max_value=100, value=int(item.get("share", 100)), step=10, key=f"share_{item['id']}")
 
@@ -392,8 +407,8 @@ def main():
             with c_fin4:
                 st.metric(
                     label=f"Faturamento Item #{idx + 1}",
-                    value=f"R$ {faturamento_item:,.2f} /mês",
-                    delta=f"Custo Tratamento: R$ {custo_ton_tratada:,.2f} /ton"
+                    value=f"US$ {faturamento_item:,.2f} /mês",
+                    delta=f"Custo Tratamento: US$ {custo_ton_tratada:,.2f} /ton"
                 )
             st.markdown("---")
 
@@ -401,26 +416,26 @@ def main():
                 "Matriz": item["matriz"],
                 "Produto": item["produto"],
                 "Dosagem (g/ton)": item["dosagem"],
-                "Custo Tratamento (R$/ton)": round(custo_ton_tratada, 2),
+                "Custo Tratamento (US$/ton)": round(custo_ton_tratada, 2),
                 "Share (%)": item["share"],
                 "Volume Faturado (kg/mês)": round(consumo_real_kg, 2),
-                "Preço Unitário (R$/kg)": round(item["preco_kg"], 2),
-                "Faturamento Mensal (R$)": round(faturamento_item, 2),
-                "Faturamento Anual (R$)": round(faturamento_item * 12.0, 2)
+                "Preço Unitário (US$/kg)": round(item["preco_kg"], 2),
+                "Faturamento Mensal (US$)": round(faturamento_item, 2),
+                "Faturamento Anual (US$)": round(faturamento_item * 12.0, 2)
             })
 
         df_fin = pd.DataFrame(linhas_financeiro)
-        st.subheader("💼 Resumo Executivo da Conta")
+        st.subheader("💼 Resumo Executivo da Conta (US$)")
         st.dataframe(df_fin, use_container_width=True, hide_index=True)
 
-        fat_mensal_total = df_fin["Faturamento Mensal (R$)"].sum() if not df_fin.empty else 0.0
-        fat_anual_total = df_fin["Faturamento Anual (R$)"].sum() if not df_fin.empty else 0.0
+        fat_mensal_total = df_fin["Faturamento Mensal (US$)"].sum() if not df_fin.empty else 0.0
+        fat_anual_total = df_fin["Faturamento Anual (US$)"].sum() if not df_fin.empty else 0.0
         vol_faturado_total = df_fin["Volume Faturado (kg/mês)"].sum() if not df_fin.empty else 0.0
 
         r1, r2, r3 = st.columns(3)
         r1.metric("Volume Total Faturado (com Share)", f"{vol_faturado_total:,.1f} kg/mês")
-        r2.metric("Faturamento Mensal Consolidado", f"R$ {fat_mensal_total:,.2f}")
-        r3.metric("Potencial Anualizado da Conta", f"R$ {fat_anual_total:,.2f}")
+        r2.metric("Faturamento Mensal Consolidado", f"US$ {fat_mensal_total:,.2f}")
+        r3.metric("Potencial Anualizado da Conta", f"US$ {fat_anual_total:,.2f}")
 
 
 if __name__ == "__main__":
