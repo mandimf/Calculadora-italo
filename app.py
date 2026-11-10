@@ -9,7 +9,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ID da Planilha Base Exclusiva Fornecida pelo Usuário
+# ID exato da planilha base informada
 SHEET_ID = "1JzqqiSqjuBb7GNaswi-EHKYn7SEOqt0RtYeHvt7ywj0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
@@ -176,7 +176,7 @@ def main():
 
     df_bruto = carregar_dados_ft()
     if df_bruto.empty:
-        st.warning("A base de dados retornou vazia ou inacessível. Verifique se a planilha base está pública para leitura.")
+        st.warning("A base de dados retornou vazia ou inacessível. Verifique se a planilha está pública para leitura.")
         return
 
     df_produtos = ordenar_portfolio(df_bruto)
