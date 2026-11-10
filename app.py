@@ -1,4 +1,3 @@
-import re
 import pandas as pd
 import streamlit as st
 
@@ -9,8 +8,8 @@ st.set_page_config(
     layout="wide",
 )
 
-# ID da Planilha Oficial consolidada no Google Drive/Sheets
-SHEET_ID = "1B-qyvNzkGi3FQJr92zVH_eaulh8YXZain7KoeTUecP4"
+# ID da Planilha oficial fornecida
+SHEET_ID = "1JzqqiSqjuBb7GNaswi-EHKYn7SEOqt0RtYeHvt7ywj0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
 
@@ -20,8 +19,20 @@ def carregar_dados_ft():
     df = pd.read_csv(SHEET_URL)
     return df
   except Exception as e:
-    st.error(
-        f"Erro ao conectar com a base de dados no Google Sheets: {e}. Verifique"
-        " se a planilha está acessível publicamente para leitura."
-    )
+    # Retorna um DataFrame vazio e exibe o erro exato na interface
+    st.error(f"Erro crítico ao carregar dados do Google Sheets: {e}")
     return pd.DataFrame()
+
+
+# Execução inicial para teste de carga
+df_produtos = carregar_dados_ft()
+
+if df_produtos.empty:
+  st.warning(
+      "Atenção: A base de dados retornou vazia ou inacessível. Verifique se a"
+      " planilha está publicada na Web como CSV."
+  )
+else:
+  st.sidebar.success(
+      f"Base carregada com sucesso! ({len(df_produtos)} produtos)"
+  )
