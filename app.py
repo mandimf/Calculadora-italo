@@ -440,3 +440,84 @@ def main():
 
         df_resumo = pd.DataFrame(resumo_cesta)
         st.subheader("📋 Quadro Consolidado de Consumo e Entrega em ppm")
+        st.dataframe(df_resumo, use_container_width=True, hide_index=True)
+
+        total_kg_geral = df_resumo["Consumo Mensal (kg)"].sum() if not df_resumo.empty else 0.0
+        st.success(f"📦 **Volume Físico Total Estimado na Conta:** {total_kg_geral:,.2f} kg / mês")
+
+    # -------------------------------------------------------------
+    # MÓDULO 3: SIMULAÇÃO DE FATURAMENTO & FECHAMENTO
+    # -------------------------------------------------------------
+    elif modulo == "3. Simulação de Faturamento & Fechamento":
+        st.header("Etapa 3: Simulador de Faturamento e Custo por Tonelada Tratada")
+        st.markdown("Defina o preço praticado (R$/kg) e o share pretendido para cada item configurado na Cesta de Tratamento.")
+
+        matrizes_opcoes = st.session_state.volumes_producao
+        linhas_financeiro = []
+
+        for idx, item in enumerate(st.session_state.cesta_aplicacao):
+            vol_base = matrizes_opcoes.get(item["matriz"], 0.0)
+            consumo_kg_100 = (vol_base * item["dosagem"]) / 1000.0
+
+            c_fin1, c_fin2, c_fin3, c_fin4 = st.columns([3, 2, 2, 3])
+            with c_fin1:
+                st.markdown(f"**{idx + 1}. {item['produto']}** *(em {item['matriz']})*")
+                st.caption(f"Dosagem: {item['dosagem']:,.0f} g/ton | Demanda 100%: {consumo_kg_100:,.1f} kg/mês")
+            with c_fin2:
+                item["preco_kg"] = st.number_input(
+                    f"Preço R$/kg (#{idx + 1}):",
+                    min_value=0.0,
+                    value=float(item.get("preco_kg", 35.0)),
+                    step=1.0,
+                    key=f"preco_{item['id']}"
+                )
+            with c_fin3:
+                item["share"] = st.slider(
+                    f"Share % (#{idx + 1}):",
+                    min_value=10,
+                    max_value=100,
+                    value=int(item.get("share", 100)),
+                    step=10,
+                    key=f"share_{item['id']}"
+                )
+
+            consumo_real_kg = consumo_kg_100 * (item["share"] / 100.0)
+            faturamento_item = consumo_real_kg * item["preco_kg"]
+            custo_ton_tratada = (item["dosagem"] / 1000.0) * item["preco_kg"]
+
+            with c_fin4:
+                st.metric(
+                    label=f"Faturamento Item #{idx + 1}",
+                    value=f"R$ {faturamento_item:,.2f} /mês",
+                    delta=f"Custo Tratamento: R$ {custo_ton_tratada:,.2f} /ton"
+                )
+            st.markdown("---")
+
+            linhas_financeiro.append({
+                "Matriz": item["matriz"],
+                "Produto": item["produto"],
+                "Dosagem (g/ton)": item["dosagem"],
+                "Custo Tratamento (R$/ton)": round(custo_ton_tratada, 2),
+                "Share (%)": item["share"],
+                "Volume Faturado (kg/mês)": round(consumo_real_kg, 2),
+                "Preço Unitário (R$/kg)": round(item["preco_kg"], 2),
+                "Faturamento Mensal (R$)": round(faturamento_item, 2),
+                "Faturamento Anual (R$)": round(faturamento_item * 12.0, 2)
+            })
+
+        df_fin = pd.DataFrame(linhas_financeiro)
+        st.subheader("💼 Resumo Executivo da Conta")
+        st.dataframe(df_fin, use_container_width=True, hide_index=True)
+
+        fat_mensal_total = df_fin["Faturamento Mensal (R$)"].sum() if not df_fin.empty else 0.0
+        fat_anual_total = df_fin["Faturamento Anual (R$)"].sum() if not df_fin.empty else 0.0
+        vol_faturado_total = df_fin["Volume Faturado (kg/mês)"].sum() if not df_fin.empty else 0.0
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Volume Total Faturado (com Share)", f"{vol_faturado_total:,.1f} kg/mês")
+        r2.metric("Faturamento Mensal Consolidado", f"R$ {fat_mensal_total:,.2f}")
+        r3.metric("Potencial Anualizado da Conta", f"R$ {fat_anual_total:,.2f}")
+
+
+if __name__ == "__main__":
+    main()
