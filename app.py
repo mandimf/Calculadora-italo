@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# ID da Planilha Oficial Consolidada Correta
-SHEET_ID = "1B-qyvNzkGi3FQJr92zVH_eaulh8YXZain7KoeTUecP4"
+# ID da Planilha Base Exclusiva Fornecida pelo Usuário
+SHEET_ID = "1JzqqiSqjuBb7GNaswi-EHKYn7SEOqt0RtYeHvt7ywj0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
 
@@ -176,7 +176,7 @@ def main():
 
     df_bruto = carregar_dados_ft()
     if df_bruto.empty:
-        st.warning("A base de dados retornou vazia ou inacessível. Verifique o compartilhamento da planilha oficial.")
+        st.warning("A base de dados retornou vazia ou inacessível. Verifique o compartilhamento da planilha base.")
         return
 
     df_produtos = ordenar_portfolio(df_bruto)
@@ -185,7 +185,7 @@ def main():
     inicializar_sessao(lista_produtos)
     recalcular_balanco()
 
-    st.sidebar.success(f"Base oficial conectada: {len(df_produtos)} produtos")
+    st.sidebar.success(f"Base de dados conectada: {len(df_produtos)} produtos")
     st.sidebar.header("🧭 Navegação")
 
     modulo = st.sidebar.radio(
