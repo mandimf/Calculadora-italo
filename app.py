@@ -3,54 +3,204 @@ import pandas as pd
 import streamlit as st
 
 # Configuração da Página
-st.set_page_config(page_title="Ecossistema Comercial - Nutrição Avícola", page_icon="📊", layout="wide")
+st.set_page_config(
+    page_title="Ecossistema Comercial - Nutrição Avícola",
+    page_icon="📊",
+    layout="wide"
+)
 
-# ID da Planilha correta fornecida por você
+# Planilha de dados informada
 SHEET_ID = "1JzqqiSqjuBb7GNaswi-EHKYn7SEOqt0RtYeHvt7ywj0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
+
 
 @st.cache_data(ttl=600)
 def carregar_dados_ft():
     try:
         df = pd.read_csv(SHEET_URL)
+        df.columns = [c.strip() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"Erro crítico ao carregar dados do Google Sheets: {e}")
+        st.error(f"Erro ao carregar dados do Google Sheets: {e}")
         return pd.DataFrame()
 
-def extrair_soma_ativos_declarados(texto_garantias):
+
+def extrair_soma_ativos_pct(texto_garantias):
+    """
+    Extrai apenas os princípios ativos com concentração numérica declarada.
+    Converte g/kg para % (dividindo por 10) para manter a base de cálculo de ppm exata.
+    """
     if not isinstance(texto_garantias, str) or not texto_garantias.strip():
         return 0.0
-    padroes = re.findall(r"(?:Mín\.?|Máx\.?)?\s*(\d+(?:[.,]\d+)?)\s*(?:%|g/kg)", texto_garantias, re.IGNORECASE)
-    soma = 0.0
-    for p in padroes:
-        val_str = p.replace(",", ".")
+
+    padroes = re.findall(
+        r"(?:Mín\.?|Máx\.?)?\s*(\d+(?:[.,]\d+)?)\s*(%|g/kg)",
+        texto_garantias,
+        re.IGNORECASE
+    )
+
+    soma_pct = 0.0
+    for valor_str, unidade in padroes:
         try:
-            soma += float(val_str)
+            val = float(valor_str.replace(",", "."))
+            if unidade.lower() == "g/kg":
+                soma_pct += val / 10.0
+            else:
+                soma_pct += val
         except ValueError:
             continue
-    return soma
+    return soma_pct
+
+
+def extrair_lista_ativos(df):
+    """Varre a coluna de garantias para listar os princípios ativos disponíveis para filtro."""
+    if "Principios_Ativos_Garantias" not in df.columns:
+        return []
+    ativos_encontrados = set()
+    for texto in df["Principios_Ativos_Garantias"].dropna():
+        partes = re.split(r"[|;/\n]", str(texto))
+        for p in partes:
+            if ":" in p:
+                nome_ativo = p.split(":")[0].strip()
+                if nome_ativo:
+                    ativos_encontrados.add(nome_ativo)
+    return sorted(list(ativos_encontrados))
+
+
+def ordenar_portfolio(df):
+    """Ordena o DataFrame priorizando Xtendra, seguido de Novamold, Salplus e Dresbond."""
+    if "Marca_Linha" not in df.columns and "Produto" not in df.columns:
+        return df
+
+    def peso_ordem(row):
+        texto = f"{row.get('Marca_Linha', '')} {row.get('Categoria', '')} {row.get('Produto', '')}".lower()
+        if "xtendra" in texto or "anox" in texto or "nasure" in texto:
+            return 1
+        if "novamold" in texto or "propical" in texto:
+            return 2
+        if "salplus" in texto:
+            return 3
+        if "dresbond" in texto:
+            return 4
+        return 5
+
+    df_copia = df.copy()
+    df_copia["_ordem"] = df_copia.apply(peso_ordem, axis=1)
+    df_copia = df_copia.sort_values(by=["_ordem", "Produto"]).drop(columns=["_ordem"])
+    return df_copia
+
+
+def inicializar_sessao(lista_produtos):
+    defaults = {
+        "tipo_gatilho": "Aves Abatidas",
+        "aves_dia": 50000.0,
+        "dias_mes": 25,
+        "racao_input": 7500.0,
+        "mp_input": 3750.0,
+        "consumo_ave": 5.0,
+        "peso_ave": 3.0,
+        "rend_mp_pv": 30.0,
+        "rend_fvo": 25.0,
+        "rend_fps": 10.0,
+        "rend_oleo": 12.67,
+        "next_id": 3
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    if "volumes_producao" not in st.session_state:
+        st.session_state.volumes_producao = {
+            "Fábrica de Ração": 6250.0,
+            "Matéria-Prima Bruta FFO": 1125.0,
+            "Farinha de Vísceras (FVO)": 281.25,
+            "Farinha de Penas (FPS)": 112.5,
+            "Óleo de Frango": 142.54
+        }
+
+    prod_inicial = lista_produtos[0] if lista_produtos else None
+    if "cesta_aplicacao" not in st.session_state:
+        st.session_state.cesta_aplicacao = [
+            {
+                "id": 1,
+                "matriz": "Farinha de Vísceras (FVO)",
+                "produto": prod_inicial,
+                "dosagem": 500.0,
+                "preco_kg": 35.0,
+                "share": 100
+            },
+            {
+                "id": 2,
+                "matriz": "Óleo de Frango",
+                "produto": prod_inicial,
+                "dosagem": 1000.0,
+                "preco_kg": 38.0,
+                "share": 100
+            }
+        ]
+
+
+def recalcular_balanco():
+    gatilho = st.session_state.tipo_gatilho
+    consumo_ave = st.session_state.consumo_ave
+    peso_ave = st.session_state.peso_ave
+    rend_mp_pv = st.session_state.rend_mp_pv
+    rend_fvo = st.session_state.rend_fvo
+    rend_fps = st.session_state.rend_fps
+    rend_oleo = st.session_state.rend_oleo
+
+    if gatilho == "Aves Abatidas":
+        aves_mes = st.session_state.aves_dia * st.session_state.dias_mes
+        racao_calc = (aves_mes * consumo_ave) / 1000.0
+        mp_calc = ((aves_mes * peso_ave) * (rend_mp_pv / 100.0)) / 1000.0
+    elif gatilho == "Produção de Ração":
+        racao_calc = st.session_state.racao_input
+        aves_mes = (racao_calc * 1000.0) / consumo_ave if consumo_ave > 0 else 0.0
+        mp_calc = ((aves_mes * peso_ave) * (rend_mp_pv / 100.0)) / 1000.0
+    else:
+        mp_calc = st.session_state.mp_input
+        fator_mp = peso_ave * (rend_mp_pv / 100.0)
+        aves_mes = (mp_calc * 1000.0) / fator_mp if fator_mp > 0 else 0.0
+        racao_calc = (aves_mes * consumo_ave) / 1000.0
+
+    fvo_calc = mp_calc * (rend_fvo / 100.0)
+    fps_calc = mp_calc * (rend_fps / 100.0)
+    oleo_calc = mp_calc * (rend_oleo / 100.0)
+
+    st.session_state.aves_mes_calc = aves_mes
+    st.session_state.volumes_producao = {
+        "Fábrica de Ração": racao_calc,
+        "Matéria-Prima Bruta FFO": mp_calc,
+        "Farinha de Vísceras (FVO)": fvo_calc,
+        "Farinha de Penas (FPS)": fps_calc,
+        "Óleo de Frango": oleo_calc
+    }
+
 
 def main():
     st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria")
-    st.markdown("Ferramenta integrada de suporte técnico-comercial em campo: Balanço de Massa, Consulta de FT, Consumo em ppm e Viabilidade de Faturamento.")
+    st.markdown("Suporte técnico-comercial integrado: Balanço de Massa, Consulta de FTs, Dosagem Multi-Ponto (ppm) e Faturamento.")
 
-    df_produtos = carregar_dados_ft()
-
-    if df_produtos.empty:
-        st.warning("A base de dados retornou vazia ou inacessível. Verifique se a planilha está pública para leitura.")
+    df_bruto = carregar_dados_ft()
+    if df_bruto.empty:
+        st.warning("A base de dados retornou vazia ou inacessível. Verifique o compartilhamento da planilha.")
         return
 
-    st.sidebar.success(f"Base carregada com sucesso! ({len(df_produtos)} produtos)")
-    st.sidebar.header("🧭 Módulos do Ecossistema")
-    
+    df_produtos = ordenar_portfolio(df_bruto)
+    lista_produtos = df_produtos["Produto"].dropna().tolist() if "Produto" in df_produtos.columns else []
+
+    inicializar_sessao(lista_produtos)
+    recalcular_balanco()
+
+    st.sidebar.success(f"Base conectada: {len(df_produtos)} produtos")
+    st.sidebar.header("🧭 Navegação")
+
     modulo = st.sidebar.radio(
         "Selecione a Etapa:",
         [
             "1. Balanço de Massa & Produção",
-            "2. Consultor de FT & Match Técnico",
-            "3. Calculadora de Consumo & ppm",
-            "4. Simulação de Faturamento & Fechamento"
+            "2. Consulta de FT & Calculadora de Consumo (ppm)",
+            "3. Simulação de Faturamento & Fechamento"
         ]
     )
 
@@ -59,139 +209,101 @@ def main():
     # -------------------------------------------------------------
     if modulo == "1. Balanço de Massa & Produção":
         st.header("Etapa 1: Simulador de Produção e Balanço de Massa")
-        st.markdown("Insira **qualquer um dos três gatilhos abaixo** para dimensionar toda a operação do cliente de forma direta ou reversa.")
+        st.markdown("Selecione o dado inicial do cliente. Todos os valores ficam salvos automaticamente ao navegar entre as abas.")
 
-        col1, col2, col3 = st.columns(3)
+        st.session_state.tipo_gatilho = st.radio(
+            "Qual dado de partida você tem?",
+            ["Aves Abatidas", "Produção de Ração", "Matéria-Prima FFO Recebida"],
+            index=["Aves Abatidas", "Produção de Ração", "Matéria-Prima FFO Recebida"].index(st.session_state.tipo_gatilho),
+            horizontal=True
+        )
+
+        col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("Gatilho A: Aves")
-            aves_dia = st.number_input("Abate de Aves (aves/dia)", min_value=0.0, value=50000.0, step=5000.0)
-            dias_mes = st.number_input("Dias de Operação / Mês", min_value=1, value=25, step=1)
-            total_aves_mes = aves_dia * dias_mes
+            st.subheader("🎯 Entrada do Gatilho Principal")
+            if st.session_state.tipo_gatilho == "Aves Abatidas":
+                st.session_state.aves_dia = st.number_input(
+                    "Abate Diário (aves/dia):",
+                    min_value=1.0,
+                    value=float(st.session_state.aves_dia),
+                    step=5000.0
+                )
+                st.session_state.dias_mes = st.number_input(
+                    "Dias de Operação / Mês:",
+                    min_value=1,
+                    value=int(st.session_state.dias_mes),
+                    step=1
+                )
+            elif st.session_state.tipo_gatilho == "Produção de Ração":
+                st.session_state.racao_input = st.number_input(
+                    "Volume de Ração Produzida (ton/mês):",
+                    min_value=1.0,
+                    value=float(st.session_state.racao_input),
+                    step=500.0
+                )
+            else:
+                st.session_state.mp_input = st.number_input(
+                    "Matéria-Prima Bruta Recebida na FFO (ton/mês):",
+                    min_value=1.0,
+                    value=float(st.session_state.mp_input),
+                    step=250.0
+                )
 
         with col2:
-            st.subheader("Gatilho B: Ração")
-            racao_fabrica_ton = st.number_input("Produção de Fábrica de Ração (ton/mês)", min_value=0.0, value=7500.0, step=500.0)
+            st.subheader("⚙️ Índices Zootécnicos e Industriais")
+            p_c1, p_c2 = st.columns(2)
+            with p_c1:
+                st.session_state.consumo_ave = st.number_input(
+                    "Consumo Ração/Ave (kg):",
+                    min_value=0.1,
+                    value=float(st.session_state.consumo_ave),
+                    step=0.1
+                )
+                st.session_state.peso_ave = st.number_input(
+                    "Peso Vivo Médio (kg):",
+                    min_value=0.1,
+                    value=float(st.session_state.peso_ave),
+                    step=0.1
+                )
+                st.session_state.rend_mp_pv = st.number_input(
+                    "Rendimento MP s/ PV (%):",
+                    min_value=1.0,
+                    value=float(st.session_state.rend_mp_pv),
+                    step=0.5
+                )
+            with p_c2:
+                st.session_state.rend_fvo = st.number_input(
+                    "Rendimento FVO s/ MP (%):",
+                    min_value=1.0,
+                    value=float(st.session_state.rend_fvo),
+                    step=0.5
+                )
+                st.session_state.rend_fps = st.number_input(
+                    "Rendimento FPS s/ MP (%):",
+                    min_value=1.0,
+                    value=float(st.session_state.rend_fps),
+                    step=0.5
+                )
+                st.session_state.rend_oleo = st.number_input(
+                    "Rendimento Óleo s/ MP (%):",
+                    min_value=1.0,
+                    value=float(st.session_state.rend_oleo),
+                    step=0.1
+                )
 
-        with col3:
-            st.subheader("Gatilho C: Matéria-Prima FFO")
-            mp_ffo_mes = st.number_input("Matéria-Prima Bruta Recebida na FFO (ton/mês)", min_value=0.0, value=3750.0, step=250.0)
-
-        st.markdown("---")
-        st.subheader("⚙️ Parâmetros Industriais e Zootécnicos (Editáveis)")
-
-        p_col1, p_col2, p_col3 = st.columns(3)
-        with p_col1:
-            consumo_racao_ave = st.number_input("Consumo Ração / Ave no Ciclo (kg)", value=5.0, step=0.1)
-            peso_vivo_ave = st.number_input("Peso Vivo Médio ao Abate (kg)", value=3.0, step=0.1)
-        with p_col2:
-            rend_mp_pv = st.number_input("Rendimento MP Bruta sobre Peso Vivo (%)", value=30.0, step=1.0)
-            rend_fvo = st.number_input("Rendimento de FVO sobre MP Bruta (%)", value=25.0, step=1.0)
-        with p_col3:
-            rend_fps = st.number_input("Rendimento de FPS sobre MP Bruta (%)", value=10.0, step=1.0)
-            rend_oleo = st.number_input("Rendimento de Óleo de Frango sobre MP Bruta (%)", value=12.67, step=0.1)
-
-        est_racao_por_aves = (total_aves_mes * consumo_racao_ave) / 1000.0
-        est_mp_por_aves = ((total_aves_mes * peso_vivo_ave) * (rend_mp_pv / 100.0)) / 1000.0
-
-        st.success("📊 **Painel de Volumes Calculados para o Cliente (Estimativa Mensal):**")
-
-        res_col1, res_col2, res_col3, res_col4, res_col5 = st.columns(5)
-        with res_col1:
-            st.metric("Ração Produzida", f"{racao_fabrica_ton:,.1f} ton", delta=f"Base Aves: {est_racao_por_aves:,.1f} ton")
-        with res_col2:
-            st.metric("Matéria-Prima FFO", f"{mp_ffo_mes:,.1f} ton", delta=f"Base Aves: {est_mp_por_aves:,.1f} ton")
-        with res_col3:
-            fvo_calc = mp_ffo_mes * (rend_fvo / 100.0)
-            st.metric("Farinha Vísceras (FVO)", f"{fvo_calc:,.1f} ton")
-        with res_col4:
-            fps_calc = mp_ffo_mes * (rend_fps / 100.0)
-            st.metric("Farinha Penas (FPS)", f"{fps_calc:,.1f} ton")
-        with res_col5:
-            oleo_calc = mp_ffo_mes * (rend_oleo / 100.0)
-            st.metric("Óleo de Frango", f"{oleo_calc:,.1f} ton")
-
-    # -------------------------------------------------------------
-    # MÓDULO 2: CONSULTOR DE FT & MATCH TÉCNICO
-    # -------------------------------------------------------------
-    elif modulo == "2. Consultor de FT & Match Técnico":
-        st.header("Etapa 2: Consultor Inteligente de Ficha Técnica (Match Direto)")
-        st.markdown("Filtre os produtos do portfólio por categoria, estado físico e princípios ativos para encontrar o equivalente direto.")
-
-        cat_disponiveis = df_produtos["Categoria"].dropna().unique().tolist() if "Categoria" in df_produtos.columns else []
-        cat_selecionada = st.multiselect("Filtrar por Categoria / Linha:", options=cat_disponiveis, default=cat_disponiveis)
-
-        estados_disponiveis = df_produtos["Estado_Fisico"].dropna().unique().tolist() if "Estado_Fisico" in df_produtos.columns else []
-        estado_selecionado = st.multiselect("Filtrar por Estado Físico:", options=estados_disponiveis, default=estados_disponiveis)
-
-        df_filtrado = df_produtos.copy()
-        if cat_selecionada:
-            df_filtrado = df_filtrado[df_filtrado["Categoria"].isin(cat_selecionada)]
-        if estado_selecionado:
-            df_filtrado = df_filtrado[df_filtrado["Estado_Fisico"].isin(estado_selecionado)]
-
-        st.dataframe(df_filtrado, use_container_width=True)
-
-    # -------------------------------------------------------------
-    # MÓDULO 3: CALCULADORA DE CONSUMO & ppm
-    # -------------------------------------------------------------
-    elif modulo == "3. Calculadora de Consumo & ppm":
-        st.header("Etapa 3: Calculadora de Consumo e Dosagem em ppm")
-        st.markdown("Selecione o produto, defina a dosagem em **g/ton** e verifique o consumo mensal e a entrega de princípios ativos em **ppm**.")
-
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            volume_substrato = st.number_input("Volume Mensal do Substrato / Matéria-Prima (ton/mês)", min_value=0.1, value=1000.0, step=100.0)
-        with col_c2:
-            produto_escolhido = st.selectbox("Selecione o Produto Comercial:", options=df_produtos["Produto"].tolist()) if "Produto" in df_produtos.columns else None
-
-        if produto_escolhido:
-            prod_info = df_produtos[df_produtos["Produto"] == produto_escolhido].iloc[0]
-            garantias = str(prod_info["Principios_Ativos_Garantias"]) if "Principios_Ativos_Garantias" in df_produtos.columns else ""
-            composicao_desc = str(prod_info["Composicao"]) if "Composicao" in df_produtos.columns else ""
-
-            st.info(f"**Produto:** {produto_escolhido} | **Categoria:** {prod_info.get('Categoria', 'N/A')}\n\n**Composição (Referência):** {composicao_desc}\n\n**Garantias Declaradas:** {garantias}")
-
-            dosagem_g_ton = st.number_input("Dosagem Aplicada (g / tonelada de substrato):", min_value=0.0, value=500.0, step=50.0)
-
-            consumo_kg_mes = (volume_substrato * dosagem_g_ton) / 1000.0
-            soma_ativos_pct = extrair_soma_ativos_declarados(garantias)
-            ppm_entregue = dosagem_g_ton * (soma_ativos_pct / 100.0)
-
-            st.success("📈 **Resultados do Dimensionamento Técnico:**")
-            res_m1, res_m2, res_m3 = st.columns(3)
-            with res_m1:
-                st.metric("Consumo Mensal do Produto", f"{consumo_kg_mes:,.2f} kg / mês")
-            with res_m2:
-                st.metric("Soma de Ativos Declarados", f"{soma_ativos_pct:.2f}%" if soma_ativos_pct > 0 else "Não quantificado em %")
-            with res_m3:
-                st.metric("Princípio Ativo Entregue", f"{ppm_entregue:,.1f} ppm (mg/kg)" if soma_ativos_pct > 0 else "Sob consulta")
-
-    # -------------------------------------------------------------
-    # MÓDULO 4: SIMULAÇÃO DE FATURAMENTO & FECHAMENTO
-    # -------------------------------------------------------------
-    elif modulo == "4. Simulação de Faturamento & Fechamento":
-        st.header("Etapa 4: Simulador de Faturamento e Viabilidade Comercial")
-        st.markdown("Traduza o consumo em volume financeiro, aplicando preço de venda e cenários de share de carteira.")
-
-        col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1:
-            consumo_sim_kg = st.number_input("Consumo Total do Produto (kg/mês)", min_value=0.0, value=500.0, step=50.0)
-        with col_f2:
-            preco_venda_kg = st.number_input("Preço de Venda Praticado (R$ / kg ou L)", min_value=0.0, value=35.0, step=1.0)
-        with col_f3:
-            share_carteira = st.slider("Share de Carteira Pretendido (%)", min_value=10, max_value=100, value=100)
-
-        faturamento_mensal = consumo_sim_kg * preco_venda_kg * (share_carteira / 100.0)
-        faturamento_anual = faturamento_mensal * 12.0
+        recalcular_balanco()
+        vols = st.session_state.volumes_producao
 
         st.markdown("---")
-        st.subheader("💰 **Resumo Executivo do Negócio:**")
-        f_res1, f_res2 = st.columns(2)
-        with f_res1:
-            st.metric("Faturamento Potencial Mensal", f"R$ {faturamento_mensal:,.2f}")
-        with f_res2:
-            st.metric("Faturamento Anualizado", f"R$ {faturamento_anual:,.2f}")
+        st.success(f"📊 **Painel de Volumes Estimados (Equivalente a {st.session_state.aves_mes_calc:,.0f} aves/mês):**")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Ração Produzida", f"{vols['Fábrica de Ração']:,.1f} ton")
+        m2.metric("Matéria-Prima FFO", f"{vols['Matéria-Prima Bruta FFO']:,.1f} ton")
+        m3.metric("Farinha Vísceras (FVO)", f"{vols['Farinha de Vísceras (FVO)']:,.1f} ton")
+        m4.metric("Farinha Penas (FPS)", f"{vols['Farinha de Penas (FPS)']:,.1f} ton")
+        m5.metric("Óleo de Frango", f"{vols['Óleo de Frango']:,.1f} ton")
 
-if __name__ == "__main__":
-    main()
+    # -------------------------------------------------------------
+    # MÓDULO 2: CONSULTA DE FT & CALCULADORA DE CONSUMO (ppm)
+    # -------------------------------------------------------------
