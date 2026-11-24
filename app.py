@@ -55,11 +55,21 @@ SINERGISTAS = {"Ácido Cítrico", "Ácido Fosfórico", "EDTA"}
 # CAMADA DE ACESSO A DADOS (READ-ONLY GOOGLE SHEETS)
 # =============================================================================
 def extrair_sheet_id(valor: str) -> str:
-    """Aceita tanto o ID puro quanto a URL completa da planilha no Google Sheets."""
-    texto = valor.strip()
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", texto)
-    return match.group(1) if match else texto
-
+    """Aceita URL do Google Sheets, URL do Google Drive (?id= ou /file/d/) ou ID puro."""
+    texto = valor.strip().strip('"').strip("'")
+    if not texto or "COLE_AQUI" in texto.upper():
+        return ""
+    for padrao in (
+        r"/spreadsheets/d/([a-zA-Z0-9-_]+)",
+        r"/file/d/([a-zA-Z0-9-_]+)",
+        r"[?&]id=([a-zA-Z0-9-_]+)",
+    ):
+        match = re.search(padrao, texto)
+        if match:
+            return match.group(1)
+    if "/" in texto or " " in texto:
+        return ""
+    return texto
 
 def obter_sheet_id_secrets() -> str:
     """Lê SHEET_ID (ou URL da planilha) de st.secrets, se configurado."""
