@@ -1,5 +1,4 @@
 import hmac
-import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -16,6 +15,8 @@ st.set_page_config(
     layout="wide",
 )
 
+# Planilha base exclusiva (somente leitura - read-only)
+SHEET_ID = "1zTclMBgggOlYfrwRQRIRvSVAVOHUdOVPA4EB1VopcHI"
 ABA_PRODUTOS = "Produtos"
 ABA_GARANTIAS = "Garantias_Ativos"
 
@@ -54,43 +55,17 @@ SINERGISTAS = {"Ácido Cítrico", "Ácido Fosfórico", "EDTA"}
 # =============================================================================
 # CAMADA DE ACESSO A DADOS (READ-ONLY GOOGLE SHEETS)
 # =============================================================================
-def extrair_sheet_id(valor: str) -> str:
-    """Aceita URL do Google Sheets, URL do Google Drive (?id= ou /file/d/) ou ID puro."""
-    texto = valor.strip().strip('"').strip("'")
-    if not texto or "COLE_AQUI" in texto.upper():
-        return ""
-    for padrao in (
-        r"/spreadsheets/d/([a-zA-Z0-9-_]+)",
-        r"/file/d/([a-zA-Z0-9-_]+)",
-        r"[?&]id=([a-zA-Z0-9-_]+)",
-    ):
-        match = re.search(padrao, texto)
-        if match:
-            return match.group(1)
-    if "/" in texto or " " in texto:
-        return ""
-    return texto
-
-def obter_sheet_id_secrets() -> str:
-    """Lê SHEET_ID (ou URL da planilha) de st.secrets, se configurado."""
-    try:
-        bruto = str(st.secrets.get("SHEET_ID", "")).strip()
-        return extrair_sheet_id(bruto)
-    except Exception:
-        return ""
-
-
 def obter_senha_app() -> str:
-    """Lê APP_PASSWORD de st.secrets, com fallback temporário para transição."""
+    """Lê APP_PASSWORD de st.secrets, com fallback para transição."""
     try:
         return str(st.secrets.get("APP_PASSWORD", "cfs2026"))
     except Exception:
         return "cfs2026"
 
 
-def montar_url_csv(sheet_id: str, nome_aba: str) -> str:
+def montar_url_csv(nome_aba: str) -> str:
     return (
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+        f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
         f"/gviz/tq?tqx=out:csv&sheet={quote(nome_aba)}"
     )
 
@@ -109,27 +84,16 @@ def _limpar_colunas_texto(df: pd.DataFrame) -> pd.DataFrame:
     return df_limpo
 
 
-@st.cache_data(ttl=300, show_spinner="Sincronizando base de consulta (2 abas)...")
-def carregar_base_normalizada(
-    sheet_id: str,
-) -> Tuple[pd.DataFrame, pd.DataFrame, str, Optional[str]]:
+@st.cache_data(ttl=300, show_spinner="Sincronizando base de produtos e garantias...")
+def carregar_base_normalizada() -> Tuple[pd.DataFrame, pd.DataFrame, str, Optional[str]]:
     """
-    Lê as abas 'Produtos' e 'Garantias_Ativos' em modo somente leitura (read-only).
+    Lê as abas 'Produtos' e 'Garantias_Ativos' diretamente da planilha fixa em modo read-only.
     Retorna: (df_produtos, df_garantias, horario_sync, mensagem_erro)
     """
     horario_sync = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    if not sheet_id:
-        return (
-            pd.DataFrame(),
-            pd.DataFrame(),
-            horario_sync,
-            "Informe o link da planilha `Base_FT_Normalizada - Amostra (1 por Categoria)` "
-            "na barra lateral ou configure `SHEET_ID` nos Secrets do Streamlit.",
-        )
-
     try:
-        df_prod = _limpar_colunas_texto(pd.read_csv(montar_url_csv(sheet_id, ABA_PRODUTOS)))
-        df_gar = _limpar_colunas_texto(pd.read_csv(montar_url_csv(sheet_id, ABA_GARANTIAS)))
+        df_prod = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_PRODUTOS)))
+        df_gar = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_GARANTIAS)))
 
         faltantes_prod = [c for c in ["id_produto", "categoria", "produto"] if c not in df_prod.columns]
         faltantes_gar = [
@@ -143,8 +107,7 @@ def carregar_base_normalizada(
                 pd.DataFrame(),
                 pd.DataFrame(),
                 horario_sync,
-                f"Aba '{ABA_PRODUTOS}' sem colunas obrigatórias: {', '.join(faltantes_prod)}. "
-                "Confirme se a planilha está compartilhada como 'Qualquer pessoa com o link (Leitor)'.",
+                f"Aba '{ABA_PRODUTOS}' sem colunas obrigatórias: {', '.join(faltantes_prod)}.",
             )
         if faltantes_gar:
             return (
@@ -186,7 +149,7 @@ def carregar_base_normalizada(
             pd.DataFrame(),
             horario_sync,
             f"Falha ao conectar com a planilha base: {exc}. "
-            "Verifique se o compartilhamento está ativo para leitura pública com o link.",
+            "Verifique a conexão e clique em 'Atualizar Base'.",
         )
 
 
@@ -302,7 +265,6 @@ def calcular_entrega_ativos(
         else:
             detalhes.append(f"{ativo}: {val} {unidade}")
 
-    # Quando um acidificante/sinergista é o único ativo garantido (ex.: SALPLUS BALANCE)
     if ppm_primarios == 0.0 and ppm_sinergistas > 0.0:
         ppm_primarios = ppm_sinergistas
         ppm_sinergistas = 0.0
@@ -491,29 +453,15 @@ def main() -> None:
 
     st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria (US$)")
     st.markdown(
-        "Suporte técnico-comercial conectado à base normalizada em 2 abas "
+        "Suporte técnico-comercial conectado diretamente à base oficial "
         "(`Produtos` + `Garantias_Ativos`, somente leitura)."
     )
 
-    sheet_id_configurado = obter_sheet_id_secrets()
+    df_produtos, df_garantias, horario_sync, erro_carga = carregar_base_normalizada()
 
     with st.sidebar:
-        st.header("🔗 Conexão da Base")
-        if not sheet_id_configurado:
-            url_manual = st.text_input(
-                "Link da Planilha Base (2 abas):",
-                value=st.session_state.get("sheet_url_manual", ""),
-                placeholder="Cole o link da Base_FT_Normalizada - Amostra",
-            )
-            st.session_state["sheet_url_manual"] = url_manual
-            sheet_id = extrair_sheet_id(url_manual)
-        else:
-            sheet_id = sheet_id_configurado
-
-        df_produtos, df_garantias, horario_sync, erro_carga = carregar_base_normalizada(sheet_id)
-
         if erro_carga:
-            st.error("Base desconectada")
+            st.error("Falha na sincronização")
         else:
             st.success(f"Base conectada: {len(df_produtos)} produtos | {len(df_garantias)} garantias")
             st.caption(f"Última sincronização: {horario_sync}")
@@ -536,11 +484,6 @@ def main() -> None:
 
     if erro_carga or df_produtos.empty:
         st.error(erro_carga or "A base de dados retornou vazia.")
-        st.info(
-            "Verifique se a planilha `Base_FT_Normalizada - Amostra (1 por Categoria)` está "
-            "compartilhada como **Qualquer pessoa com o link (Leitor)** e cole o link na barra "
-            "lateral ou em `SHEET_ID` nos Secrets do Streamlit."
-        )
         return
 
     lista_produtos = df_produtos["produto"].tolist()
