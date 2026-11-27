@@ -49,6 +49,13 @@ PARES_DUPLA_DECLARACAO: List[Tuple[str, str]] = [
 
 SINERGISTAS = {"Ácido Cítrico", "Ácido Fosfórico", "EDTA"}
 
+ETAPAS_NAVEGACAO = [
+    "0. Cadastro Cliente",
+    "1. Cálculo de Produção de Ração & FFO",
+    "2. Produtos & Dosagens",
+    "3. Faturamento & Proposta",
+]
+
 
 def obter_senha_app() -> str:
     try:
@@ -254,13 +261,13 @@ def carregar_base_normalizada() -> Tuple[pd.DataFrame, pd.DataFrame, str, Option
 
 def calcular_entrega_ativos(
     id_produto: str,
-    dosagem_g_ton: float,
+    dosagem_kg_ton: float,
     df_garantias: pd.DataFrame,
 ) -> Dict[str, Any]:
     gar_prod = df_garantias[df_garantias["id_produto"] == id_produto]
-    if gar_prod.empty or dosagem_g_ton <= 0:
+    if gar_prod.empty or dosagem_kg_ton <= 0:
         return {
-            "detalhe_texto": "Sem garantia numérica aplicável" if gar_prod.empty else "Dosagem 0 g/ton",
+            "detalhe_texto": "Sem garantia numérica aplicável" if gar_prod.empty else "Dosagem 0 kg/ton",
             "ppm_primarios": 0.0,
             "ppm_sinergistas": 0.0,
             "tem_ppm": False,
@@ -289,7 +296,7 @@ def calcular_entrega_ativos(
             continue
 
         if unidade == "%":
-            ppm_mol = dosagem_g_ton * (float(val) / 100.0)
+            ppm_mol = dosagem_kg_ton * float(val) * 10.0
             tem_ppm = True
             detalhes.append(f"{ativo}: {fmt_br(ppm_mol, 1)} ppm")
             if ativo not in ativos_excluidos_soma:
@@ -298,13 +305,13 @@ def calcular_entrega_ativos(
                 else:
                     ppm_primarios += ppm_mol
         elif unidade.lower() == "mg/kg":
-            ppm_mol = dosagem_g_ton * (float(val) / 1_000_000.0)
+            ppm_mol = dosagem_kg_ton * (float(val) / 1_000.0)
             tem_ppm = True
             detalhes.append(f"{ativo}: {fmt_br(ppm_mol, 3)} ppm")
             if ativo not in ativos_excluidos_soma:
                 ppm_primarios += ppm_mol
         elif unidade.upper() == "UFC/G":
-            ufc_g_substrato = (dosagem_g_ton * float(val)) / 1_000_000.0
+            ufc_g_substrato = dosagem_kg_ton * float(val)
             detalhes.append(f"{ativo}: {ufc_g_substrato:.2e} UFC/g".replace(".", ","))
         else:
             detalhes.append(f"{ativo}: {val} {unidade}")
@@ -465,7 +472,7 @@ def gerar_pdf_proposta(
     col_preco = f"Preço {incoterm}"
     if modo_tecnico:
         headers = ["Produto / Descrição", "Dosagem", "Qtd. mensal", col_preco, "Custo/ton", "Observação / Aplicação"]
-        widths = [50, 20, 24, 24, 22, 40]
+        widths = [50, 22, 24, 24, 22, 38]
         aligns = ["L", "C", "R", "R", "R", "L"]
     else:
         headers = ["Produto / Descrição", "Quantidade mensal", col_preco, "Observação / Aplicação"]
@@ -491,7 +498,7 @@ def gerar_pdf_proposta(
         obs_str = lp["obs_pdf"] or "-"
 
         if modo_tecnico:
-            valores = [desc_prod, f"{fmt_br(lp['dosagem'], 0)} g/t", qtd_str, preco_str, f"USD {fmt_br(lp['custo_ton'], 2)}", obs_str]
+            valores = [desc_prod, f"{fmt_br(lp['dosagem'], 2)} kg/t", qtd_str, preco_str, f"USD {fmt_br(lp['custo_ton'], 2)}", obs_str]
         else:
             valores = [desc_prod, qtd_str, preco_str, obs_str]
 
@@ -595,7 +602,7 @@ def inicializar_sessao(lista_produtos: List[str]) -> None:
                 "id": 1,
                 "matriz": "Farinha de Vísceras (FV)",
                 "produto": prod_inicial,
-                "dosagem": 500.0,
+                "dosagem": 0.5,
                 "observacao": "Aplicação primária no fluxo",
                 "preco_kg": 15.0,
                 "share": 100,
@@ -604,7 +611,7 @@ def inicializar_sessao(lista_produtos: List[str]) -> None:
                 "id": 2,
                 "matriz": "Óleo de Frango",
                 "produto": prod_inicial,
-                "dosagem": 1000.0,
+                "dosagem": 1.0,
                 "observacao": "Estabilização lipídica",
                 "preco_kg": 18.0,
                 "share": 100,
@@ -630,6 +637,30 @@ def atualizar_balanco_na_sessao() -> None:
     st.session_state.volumes_producao = volumes
 
 
+def renderizar_setas_navegacao(indice_atual: int) -> None:
+    st.markdown("---")
+    col_ant, _, col_prox = st.columns([1.6, 2.8, 1.6])
+    with col_ant:
+        if indice_atual > 0:
+            if st.button(
+                "⬅️ Etapa Anterior",
+                key=f"nav_ant_{indice_atual}",
+                use_container_width=True,
+            ):
+                st.session_state["nav_etapa"] = ETAPAS_NAVEGACAO[indice_atual - 1]
+                st.rerun()
+    with col_prox:
+        if indice_atual < len(ETAPAS_NAVEGACAO) - 1:
+            if st.button(
+                "Próxima Etapa ➡️",
+                key=f"nav_prox_{indice_atual}",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["nav_etapa"] = ETAPAS_NAVEGACAO[indice_atual + 1]
+                st.rerun()
+
+
 def autenticar_usuario() -> bool:
     if "autenticado" not in st.session_state:
         st.session_state.autenticado = False
@@ -653,9 +684,11 @@ def main() -> None:
         return
 
     st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria (US$)")
-    st.markdown("Suporte técnico-comercial conectado diretamente à base oficial (somente leitura).")
 
     df_produtos, df_garantias, horario_sync, erro_carga = carregar_base_normalizada()
+
+    if "nav_etapa" not in st.session_state or st.session_state["nav_etapa"] not in ETAPAS_NAVEGACAO:
+        st.session_state["nav_etapa"] = ETAPAS_NAVEGACAO[0]
 
     with st.sidebar:
         if erro_carga:
@@ -672,12 +705,8 @@ def main() -> None:
         st.header("🧭 Navegação")
         modulo = st.radio(
             "Selecione a Etapa:",
-            [
-                "0. Cadastro do Cliente & Consultor",
-                "1. Balanço de Massa & Produção",
-                "2. Consulta de FT & Cesta de Tratamento",
-                "3. Simulação de Faturamento & Proposta PDF (US$)",
-            ],
+            ETAPAS_NAVEGACAO,
+            key="nav_etapa",
         )
 
     if erro_carga or df_produtos.empty:
@@ -690,8 +719,8 @@ def main() -> None:
     inicializar_sessao(lista_produtos)
     atualizar_balanco_na_sessao()
 
-    if modulo == "0. Cadastro do Cliente & Consultor":
-        st.header("Etapa 0: Identificação do Consultor, Cliente e Histórico (CRM)")
+    if modulo == ETAPAS_NAVEGACAO[0]:
+        st.header("Etapa 0: Cadastro Cliente")
         col_forn, col_cli = st.columns(2)
         with col_forn:
             st.subheader("👔 Dados do Fornecedor (Consultor CFS)")
@@ -736,8 +765,10 @@ def main() -> None:
         else:
             st.info("Nenhuma simulação salva nesta sessão ainda.")
 
-    elif modulo == "1. Balanço de Massa & Produção":
-        st.header("Etapa 1: Simulador de Produção e Balanço de Massa")
+        renderizar_setas_navegacao(0)
+
+    elif modulo == ETAPAS_NAVEGACAO[1]:
+        st.header("Etapa 1: Cálculo de Produção de Ração & FFO")
         if st.session_state.cliente_nome:
             st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome}")
 
@@ -850,8 +881,10 @@ def main() -> None:
         m4.metric("Farinha Penas (FPS)", f"{fmt_br(vols['Farinha de Penas (FPS)'], 1)} ton")
         m5.metric("Óleo de Frango", f"{fmt_br(vols['Óleo de Frango'], 1)} ton")
 
-    elif modulo == "2. Consulta de FT & Cesta de Tratamento":
-        st.header("Etapa 2: Portfólio de FTs & Cesta de Tratamento Multi-Ponto")
+        renderizar_setas_navegacao(1)
+
+    elif modulo == ETAPAS_NAVEGACAO[2]:
+        st.header("Etapa 2: Produtos & Dosagens")
         if st.session_state.cliente_nome:
             st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome}")
 
@@ -918,10 +951,10 @@ def main() -> None:
                 item["produto"] = st.selectbox(f"Produto #{idx + 1}:", options=lista_produtos, index=prod_idx, key=f"prod_{item['id']}")
             with c3:
                 item["dosagem"] = input_numero_br(
-                    f"g/ton #{idx + 1}:",
+                    f"kg/ton #{idx + 1}:",
                     value=float(item["dosagem"]),
                     key=f"dose_{item['id']}",
-                    casas=1,
+                    casas=2,
                     min_value=0.0,
                 )
             with c4:
@@ -939,7 +972,7 @@ def main() -> None:
                         itens_para_remover.append(item["id"])
 
             vol_base = float(matrizes_opcoes.get(item["matriz"], 0.0))
-            consumo_linha_kg = (vol_base * float(item["dosagem"])) / 1000.0
+            consumo_linha_kg = vol_base * float(item["dosagem"])
             total_kg_geral += consumo_linha_kg
             info_p = mapa_produtos.get(item["produto"], {})
             id_prod = str(info_p.get("id_produto", ""))
@@ -959,7 +992,7 @@ def main() -> None:
                 "Volume Matriz (ton/mês)": fmt_br(vol_base, 1),
                 "Produto Comercial": item["produto"],
                 "Estado Físico": est_fisico,
-                "Dosagem (g/ton)": fmt_br(float(item["dosagem"]), 1),
+                "Dosagem (kg/ton)": fmt_br(float(item["dosagem"]), 2),
                 "Entrega por Molécula": entrega["detalhe_texto"],
                 "Ativos Primários (ppm)": fmt_br(entrega["ppm_primarios"], 2) if entrega["tem_ppm"] else "N/A",
                 "Observação": item["observacao"],
@@ -983,7 +1016,7 @@ def main() -> None:
                 "id": st.session_state.next_id,
                 "matriz": "Fábrica de Ração",
                 "produto": lista_produtos[0] if lista_produtos else "",
-                "dosagem": 500.0,
+                "dosagem": 0.5,
                 "observacao": "",
                 "preco_kg": 15.0,
                 "share": 100,
@@ -996,8 +1029,10 @@ def main() -> None:
         st.dataframe(df_resumo, use_container_width=True, hide_index=True)
         st.success(f"📦 **Volume Físico Total Estimado na Conta:** {fmt_br(total_kg_geral, 2)} kg / mês")
 
-    elif modulo == "3. Simulação de Faturamento & Proposta PDF (US$)":
-        st.header("Etapa 3: Simulador de Faturamento e Proposta Comercial em PDF (US$)")
+        renderizar_setas_navegacao(2)
+
+    elif modulo == ETAPAS_NAVEGACAO[3]:
+        st.header("Etapa 3: Faturamento & Proposta")
         if st.session_state.cliente_nome:
             st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome} (CNPJ: {st.session_state.cliente_cnpj or 'N/A'})")
 
@@ -1011,7 +1046,7 @@ def main() -> None:
         for idx, item in enumerate(st.session_state.cesta_aplicacao):
             vol_base = float(matrizes_opcoes.get(item["matriz"], 0.0))
             dosagem = float(item["dosagem"])
-            consumo_kg_100 = (vol_base * dosagem) / 1000.0
+            consumo_kg_100 = vol_base * dosagem
             info_p = mapa_produtos.get(item["produto"], {})
             id_prod = str(info_p.get("id_produto", ""))
             entrega = calcular_entrega_ativos(id_prod, dosagem, df_garantias)
@@ -1020,7 +1055,7 @@ def main() -> None:
             c_fin1, c_fin2, c_fin3, c_fin4 = st.columns([3, 2, 2, 3])
             with c_fin1:
                 st.markdown(f"**{idx + 1}. {item['produto']}** *(em {item['matriz']})*")
-                st.caption(f"Dosagem: {fmt_br(dosagem, 0)} g/ton | {entrega['detalhe_texto']} | Obs: {item.get('observacao') or 'N/A'}")
+                st.caption(f"Dosagem: {fmt_br(dosagem, 2)} kg/ton | {entrega['detalhe_texto']} | Obs: {item.get('observacao') or 'N/A'}")
             with c_fin2:
                 item["preco_kg"] = input_numero_br(
                     f"Preço US$/kg (#{idx + 1}):",
@@ -1036,7 +1071,7 @@ def main() -> None:
             share = int(item["share"])
             consumo_real_kg = consumo_kg_100 * (share / 100.0)
             faturamento_item = consumo_real_kg * preco_kg
-            custo_ton_tratada = (dosagem / 1000.0) * preco_kg
+            custo_ton_tratada = dosagem * preco_kg
 
             vol_faturado_total += consumo_real_kg
             fat_mensal_total += faturamento_item
@@ -1053,7 +1088,7 @@ def main() -> None:
             linhas_financeiro.append({
                 "Matriz": item["matriz"],
                 "Produto": item["produto"],
-                "Dosagem (g/ton)": fmt_br(dosagem, 1),
+                "Dosagem (kg/ton)": fmt_br(dosagem, 2),
                 "Entrega por Molécula": entrega["detalhe_texto"],
                 "Observação": item.get("observacao", ""),
                 "Custo Tratamento (US$/ton)": fmt_br(custo_ton_tratada, 2),
@@ -1090,7 +1125,7 @@ def main() -> None:
             "Formato da Tabela no PDF:",
             [
                 "Comercial Enxuta (Produto, Qtd., Preço, Observação)",
-                "Técnica-Comercial (+ Dosagem g/ton e Custo/ton USD)",
+                "Técnica-Comercial (+ Dosagem kg/ton e Custo/ton USD)",
             ],
             horizontal=True,
         )
@@ -1144,6 +1179,8 @@ def main() -> None:
             mime="application/pdf",
             type="primary",
         )
+
+        renderizar_setas_navegacao(3)
 
 
 if __name__ == "__main__":
