@@ -9,9 +9,6 @@ import pandas as pd
 import streamlit as st
 from fpdf import FPDF
 
-# =============================================================================
-# CONFIGURAÇÃO DA PÁGINA E CONSTANTES
-# =============================================================================
 st.set_page_config(
     page_title="Ecossistema Comercial - Nutrição Avícola & Graxaria",
     page_icon="📊",
@@ -53,9 +50,6 @@ PARES_DUPLA_DECLARACAO: List[Tuple[str, str]] = [
 SINERGISTAS = {"Ácido Cítrico", "Ácido Fosfórico", "EDTA"}
 
 
-# =============================================================================
-# CAMADA DE ACESSO A DADOS (READ-ONLY GOOGLE SHEETS)
-# =============================================================================
 def obter_senha_app() -> str:
     try:
         return str(st.secrets.get("APP_PASSWORD", "cfs2026"))
@@ -84,53 +78,6 @@ def _limpar_colunas_texto(df: pd.DataFrame) -> pd.DataFrame:
     return df_limpo
 
 
-@st.cache_data(ttl=300, show_spinner="Sincronizando base de produtos e garantias...")
-def carregar_base_normalizada() -> Tuple[pd.DataFrame, pd.DataFrame, str, Optional[str]]:
-    horario_sync = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    try:
-        df_prod = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_PRODUTOS)))
-        df_gar = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_GARANTIAS)))
-
-        faltantes_prod = [c for c in ["id_produto", "categoria", "produto"] if c not in df_prod.columns]
-        faltantes_gar = [
-            c for c in ["id_produto", "ativo_padronizado", "valor_numerico", "unidade"]
-            if c not in df_gar.columns
-        ]
-        if faltantes_prod:
-            return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Aba '{ABA_PRODUTOS}' sem colunas: {', '.join(faltantes_prod)}."
-        if faltantes_gar:
-            return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Aba '{ABA_GARANTIAS}' sem colunas: {', '.join(faltantes_gar)}."
-
-        df_prod = df_prod[df_prod["id_produto"] != ""].copy()
-        df_gar = df_gar[df_gar["id_produto"] != ""].copy()
-        df_gar["valor_numerico"] = pd.to_numeric(
-            df_gar["valor_numerico"].astype(str).str.replace(",", ".", regex=False),
-            errors="coerce",
-        )
-
-        for col in COLUNAS_PRODUTOS:
-            if col not in df_prod.columns:
-                df_prod[col] = ""
-        for col in COLUNAS_GARANTIAS:
-            if col not in df_gar.columns:
-                df_gar[col] = ""
-
-        resumo_garantias = (
-            df_gar.groupby("id_produto")
-            .apply(formatar_resumo_garantias_df)
-            .reset_index(name="garantias_resumo")
-        )
-        df_prod = df_prod.merge(resumo_garantias, on="id_produto", how="left")
-        df_prod["garantias_resumo"] = df_prod["garantias_resumo"].fillna("Sem garantia declarada")
-        df_prod = ordenar_portfolio(df_prod)
-        return df_prod, df_gar, horario_sync, None
-    except Exception as exc:
-        return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Falha ao conectar com a planilha base: {exc}."
-
-
-# =============================================================================
-# CAMADA DE DOMÍNIO (FORMATAÇÃO BR, ENTRADA NUMÉRICA, CÁLCULOS E PDF)
-# =============================================================================
 def fmt_br(valor: float, casas: int = 2) -> str:
     texto = f"{valor:,.{casas}f}"
     return texto.replace(",", "X").replace(".", ",").replace("X", ".")
@@ -261,6 +208,50 @@ def ordenar_portfolio(df: pd.DataFrame) -> pd.DataFrame:
     return df_copia.reset_index(drop=True)
 
 
+@st.cache_data(ttl=300, show_spinner="Sincronizando base de produtos e garantias...")
+def carregar_base_normalizada() -> Tuple[pd.DataFrame, pd.DataFrame, str, Optional[str]]:
+    horario_sync = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    try:
+        df_prod = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_PRODUTOS)))
+        df_gar = _limpar_colunas_texto(pd.read_csv(montar_url_csv(ABA_GARANTIAS)))
+
+        faltantes_prod = [c for c in ["id_produto", "categoria", "produto"] if c not in df_prod.columns]
+        faltantes_gar = [
+            c for c in ["id_produto", "ativo_padronizado", "valor_numerico", "unidade"]
+            if c not in df_gar.columns
+        ]
+        if faltantes_prod:
+            return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Aba '{ABA_PRODUTOS}' sem colunas: {', '.join(faltantes_prod)}."
+        if faltantes_gar:
+            return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Aba '{ABA_GARANTIAS}' sem colunas: {', '.join(faltantes_gar)}."
+
+        df_prod = df_prod[df_prod["id_produto"] != ""].copy()
+        df_gar = df_gar[df_gar["id_produto"] != ""].copy()
+        df_gar["valor_numerico"] = pd.to_numeric(
+            df_gar["valor_numerico"].astype(str).str.replace(",", ".", regex=False),
+            errors="coerce",
+        )
+
+        for col in COLUNAS_PRODUTOS:
+            if col not in df_prod.columns:
+                df_prod[col] = ""
+        for col in COLUNAS_GARANTIAS:
+            if col not in df_gar.columns:
+                df_gar[col] = ""
+
+        resumo_garantias = (
+            df_gar.groupby("id_produto")
+            .apply(formatar_resumo_garantias_df)
+            .reset_index(name="garantias_resumo")
+        )
+        df_prod = df_prod.merge(resumo_garantias, on="id_produto", how="left")
+        df_prod["garantias_resumo"] = df_prod["garantias_resumo"].fillna("Sem garantia declarada")
+        df_prod = ordenar_portfolio(df_prod)
+        return df_prod, df_gar, horario_sync, None
+    except Exception as exc:
+        return pd.DataFrame(), pd.DataFrame(), horario_sync, f"Falha ao conectar com a planilha base: {exc}."
+
+
 def calcular_entrega_ativos(
     id_produto: str,
     dosagem_g_ton: float,
@@ -351,6 +342,505 @@ def calcular_balanco_massa(
     elif tipo_gatilho == "Produção de Ração":
         racao_calc = max(racao_input, 0.0)
         aves_mes = (racao_calc * 1000.0) / consumo_ave if consumo_ave > 0 else 0.0
+        mp_calc = ((aves_mes * peso_ave) * (rend_mp_pv / 100.0)) / 1000.0
+    else:
+        mp_calc = max(mp_input, 0.0)
+        fator_mp = peso_ave * (rend_mp_pv / 100.0)
+        aves_mes = (mp_calc * 1000.0) / fator_mp if fator_mp > 0 else 0.0
+        racao_calc = (aves_mes * consumo_ave) / 1000.0
 
-if __name__ == "__main__":
-    main()
+    volumes = {
+        "Fábrica de Ração": racao_calc,
+        "Matéria-Prima Bruta FFO": mp_calc,
+        "Farinha de Vísceras (FV)": mp_calc * (rend_fv / 100.0),
+        "Farinha de Penas (FPS)": mp_calc * (rend_fps / 100.0),
+        "Óleo de Frango": mp_calc * (rend_oleo / 100.0),
+    }
+    return aves_mes, volumes
+
+
+class PropostaCFSPDF(FPDF):
+    def footer(self) -> None:
+        self.set_y(-18)
+        self.set_draw_color(210, 215, 220)
+        self.line(15, self.get_y(), 195, self.get_y())
+        self.ln(3)
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(100, 110, 120)
+        self.cell(0, 5, "BRINGING SCIENCE TO EVERYDAY LIFE", align="C", ln=0)
+
+
+def gerar_pdf_proposta(
+    consultor_nome: str,
+    consultor_email: str,
+    consultor_telefone: str,
+    cliente_nome: str,
+    cliente_cnpj: str,
+    cliente_contato: str,
+    cliente_email: str,
+    incoterm: str,
+    destino: str,
+    expedicao_dias: int,
+    validade_str: str,
+    pagamento: str,
+    obs_gerais: str,
+    modo_tecnico: bool,
+    linhas_proposta: List[Dict[str, Any]],
+) -> bytes:
+    pdf = PropostaCFSPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=24)
+    pdf.set_margins(15, 14, 15)
+    pdf.add_page()
+
+    pdf.set_xy(15, 14)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(15, 35, 65)
+    pdf.cell(115, 8, pdf_safe("Proposta Comercial"), ln=1)
+
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "", 9.5)
+    pdf.set_text_color(90, 95, 105)
+    pdf.cell(115, 5, pdf_safe(f"Emissão: {datetime.now().strftime('%d/%m/%Y')}"), ln=0)
+
+    logo_inserido = False
+    if os.path.exists(LOGO_PATH):
+        try:
+            pdf.image(LOGO_PATH, x=155, y=12, w=40)
+            logo_inserido = True
+        except Exception:
+            logo_inserido = False
+
+    if not logo_inserido:
+        pdf.set_xy(125, 15)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(0, 74, 153)
+        pdf.cell(70, 6, "CFS  Camlin Fine Sciences", align="R", ln=0)
+
+    pdf.set_draw_color(0, 74, 153)
+    pdf.set_line_width(0.6)
+    pdf.line(15, 31, 195, 31)
+    pdf.set_y(36)
+
+    y_info = pdf.get_y()
+
+    pdf.set_xy(15, y_info)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(0, 74, 153)
+    pdf.cell(85, 5, "FORNECEDOR", ln=1)
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(85, 5, pdf_safe(consultor_nome or "Consultor CFS"), ln=1)
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    contato_forn = " | ".join([x for x in [consultor_email, consultor_telefone] if x.strip()])
+    pdf.multi_cell(85, 4.5, pdf_safe(contato_forn or "Camlin Fine Sciences"))
+    y_fim_forn = pdf.get_y()
+
+    pdf.set_xy(105, y_info)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(0, 74, 153)
+    pdf.cell(90, 5, "CLIENTE", ln=1)
+    pdf.set_x(105)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(90, 5, pdf_safe(cliente_nome or "Não especificado"), ln=1)
+    pdf.set_x(105)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    linha_ac_partes: List[str] = []
+    if cliente_contato.strip():
+        linha_ac_partes.append(f"A/C: {cliente_contato.strip()}")
+    if cliente_email.strip():
+        linha_ac_partes.append(cliente_email.strip())
+    if cliente_cnpj.strip():
+        linha_ac_partes.append(f"CNPJ: {cliente_cnpj.strip()}")
+    texto_ac = " | ".join(linha_ac_partes) if linha_ac_partes else "-"
+    pdf.multi_cell(90, 4.5, pdf_safe(texto_ac))
+    y_fim_cli = pdf.get_y()
+
+    pdf.set_y(max(y_fim_forn, y_fim_cli) + 8)
+
+    col_preco = f"Preço {incoterm}"
+    if modo_tecnico:
+        headers = ["Produto / Descrição", "Dosagem", "Qtd. mensal", col_preco, "Custo/ton", "Observação / Aplicação"]
+        widths = [50, 20, 24, 24, 22, 40]
+        aligns = ["L", "C", "R", "R", "R", "L"]
+    else:
+        headers = ["Produto / Descrição", "Quantidade mensal", col_preco, "Observação / Aplicação"]
+        widths = [64, 32, 32, 52]
+        aligns = ["L", "R", "R", "L"]
+
+    pdf.set_fill_color(15, 35, 65)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8.5)
+    for h, w, al in zip(headers, widths, aligns):
+        pdf.cell(w, 8, pdf_safe(h), border=0, align=al, fill=True)
+    pdf.ln()
+
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_draw_color(220, 225, 230)
+    pdf.set_line_width(0.25)
+
+    for idx_row, lp in enumerate(linhas_proposta):
+        desc_prod = lp["produto_pdf"]
+        qtd_str = f"{fmt_br(lp['qtd_mensal'], 0)} kg"
+        preco_str = f"USD {fmt_br(lp['preco_kg'], 2)}/kg"
+        obs_str = lp["obs_pdf"] or "-"
+
+        if modo_tecnico:
+            valores = [desc_prod, f"{fmt_br(lp['dosagem'], 0)} g/t", qtd_str, preco_str, f"USD {fmt_br(lp['custo_ton'], 2)}", obs_str]
+        else:
+            valores = [desc_prod, qtd_str, preco_str, obs_str]
+
+        line_h = 5.0
+        max_lines = 1
+        for val_txt, w in zip(valores, widths):
+            linhas_calc = pdf.multi_cell(w - 2, line_h, pdf_safe(val_txt), split_only=True)
+            max_lines = max(max_lines, len(linhas_calc))
+        row_h = max(8.0, max_lines * line_h + 2.5)
+
+        if pdf.get_y() + row_h > 268:
+            pdf.add_page()
+
+        x_start = 15.0
+        y_start = pdf.get_y()
+        if idx_row % 2 == 1:
+            pdf.set_fill_color(246, 248, 251)
+            pdf.rect(x_start, y_start, sum(widths), row_h, style="F")
+
+        cur_x = x_start
+        for val_txt, w, al in zip(valores, widths, aligns):
+            pdf.set_xy(cur_x + 1, y_start + 1.2)
+            pdf.multi_cell(w - 2, line_h, pdf_safe(val_txt), border=0, align=al)
+            cur_x += w
+
+        pdf.line(x_start, y_start + row_h, x_start + sum(widths), y_start + row_h)
+        pdf.set_y(y_start + row_h)
+
+    pdf.ln(8)
+
+    pdf.set_font("Helvetica", "B", 9.5)
+    pdf.set_text_color(15, 35, 65)
+    pdf.cell(0, 6, pdf_safe("Condições Comerciais"), ln=1)
+    pdf.ln(1)
+
+    incoterm_full = f"{incoterm} - {destino}" if destino.strip() else incoterm
+    condicoes = [
+        ("Incoterm:", incoterm_full),
+        ("Expedição:", f"{expedicao_dias} dias úteis"),
+        ("Validade da proposta:", validade_str),
+        ("Pagamento:", pagamento),
+    ]
+    for rotulo, valor in condicoes:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(50, 55, 65)
+        pdf.cell(42, 5.5, pdf_safe(rotulo), ln=0)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(30, 30, 30)
+        pdf.cell(0, 5.5, pdf_safe(valor), ln=1)
+
+    if obs_gerais.strip():
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.set_text_color(70, 75, 85)
+        pdf.cell(0, 5, pdf_safe("Observações Gerais:"), ln=1)
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_text_color(60, 60, 60)
+        pdf.multi_cell(0, 4.5, pdf_safe(obs_gerais.strip()))
+
+    saida = pdf.output()
+    return bytes(saida) if isinstance(saida, (bytes, bytearray)) else saida.encode("latin-1")
+
+
+def inicializar_sessao(lista_produtos: List[str]) -> None:
+    defaults: Dict[str, Any] = {
+        "consultor_nome": "",
+        "consultor_email": "",
+        "consultor_telefone": "",
+        "cliente_nome": "",
+        "cliente_cnpj": "",
+        "cliente_contato": "",
+        "cliente_email": "",
+        "tipo_gatilho": "Aves Abatidas",
+        "aves_dia": 50000.0,
+        "dias_mes": 25,
+        "racao_input": 7500.0,
+        "mp_input": 3750.0,
+        "consumo_ave": 5.0,
+        "peso_ave": 3.0,
+        "rend_mp_pv": 30.0,
+        "rend_fv": 25.0,
+        "rend_fps": 10.0,
+        "rend_oleo": 12.67,
+        "next_id": 3,
+        "crm_historico": [],
+        "incoterm": "CIF",
+        "destino": "",
+        "expedicao_dias": 5,
+        "validade_proposta": date.today() + timedelta(days=30),
+        "pagamento": "30 dias",
+        "obs_gerais_pdf": "",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    prod_inicial = lista_produtos[0] if lista_produtos else ""
+    if "cesta_aplicacao" not in st.session_state:
+        st.session_state.cesta_aplicacao = [
+            {
+                "id": 1,
+                "matriz": "Farinha de Vísceras (FV)",
+                "produto": prod_inicial,
+                "dosagem": 500.0,
+                "observacao": "Aplicação primária no fluxo",
+                "preco_kg": 15.0,
+                "share": 100,
+            },
+            {
+                "id": 2,
+                "matriz": "Óleo de Frango",
+                "produto": prod_inicial,
+                "dosagem": 1000.0,
+                "observacao": "Estabilização lipídica",
+                "preco_kg": 18.0,
+                "share": 100,
+            },
+        ]
+
+
+def atualizar_balanco_na_sessao() -> None:
+    aves_mes, volumes = calcular_balanco_massa(
+        tipo_gatilho=st.session_state.tipo_gatilho,
+        aves_dia=float(st.session_state.aves_dia),
+        dias_mes=int(st.session_state.dias_mes),
+        racao_input=float(st.session_state.racao_input),
+        mp_input=float(st.session_state.mp_input),
+        consumo_ave=float(st.session_state.consumo_ave),
+        peso_ave=float(st.session_state.peso_ave),
+        rend_mp_pv=float(st.session_state.rend_mp_pv),
+        rend_fv=float(st.session_state.rend_fv),
+        rend_fps=float(st.session_state.rend_fps),
+        rend_oleo=float(st.session_state.rend_oleo),
+    )
+    st.session_state.aves_mes_calc = aves_mes
+    st.session_state.volumes_producao = volumes
+
+
+def autenticar_usuario() -> bool:
+    if "autenticado" not in st.session_state:
+        st.session_state.autenticado = False
+    if st.session_state.autenticado:
+        return True
+
+    st.title("🔒 Autenticação Restrita")
+    st.markdown("Insira a senha de acesso para utilizar o Ecossistema Comercial.")
+    senha_digitada = st.text_input("Senha de Acesso:", type="password")
+    if st.button("Entrar", type="primary"):
+        if hmac.compare_digest(senha_digitada, obter_senha_app()):
+            st.session_state.autenticado = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta. Verifique e tente novamente.")
+    return False
+
+
+def main() -> None:
+    if not autenticar_usuario():
+        return
+
+    st.title("🐔 Ecossistema Comercial - Nutrição Avícola & Graxaria (US$)")
+    st.markdown("Suporte técnico-comercial conectado diretamente à base oficial (somente leitura).")
+
+    df_produtos, df_garantias, horario_sync, erro_carga = carregar_base_normalizada()
+
+    with st.sidebar:
+        if erro_carga:
+            st.error("Falha na sincronização")
+        else:
+            st.success(f"Base conectada: {len(df_produtos)} produtos | {len(df_garantias)} garantias")
+            st.caption(f"Última sincronização: {horario_sync}")
+
+        if st.button("🔄 Atualizar Base", use_container_width=True):
+            carregar_base_normalizada.clear()
+            st.rerun()
+
+        st.markdown("---")
+        st.header("🧭 Navegação")
+        modulo = st.radio(
+            "Selecione a Etapa:",
+            [
+                "0. Cadastro do Cliente & Consultor",
+                "1. Balanço de Massa & Produção",
+                "2. Consulta de FT & Cesta de Tratamento",
+                "3. Simulação de Faturamento & Proposta PDF (US$)",
+            ],
+        )
+
+    if erro_carga or df_produtos.empty:
+        st.error(erro_carga or "A base de dados retornou vazia.")
+        return
+
+    lista_produtos = df_produtos["produto"].tolist()
+    mapa_produtos = df_produtos.set_index("produto").to_dict(orient="index")
+
+    inicializar_sessao(lista_produtos)
+    atualizar_balanco_na_sessao()
+
+    if modulo == "0. Cadastro do Cliente & Consultor":
+        st.header("Etapa 0: Identificação do Consultor, Cliente e Histórico (CRM)")
+        col_forn, col_cli = st.columns(2)
+        with col_forn:
+            st.subheader("👔 Dados do Fornecedor (Consultor CFS)")
+            st.session_state.consultor_nome = st.text_input("Nome do Consultor:", value=st.session_state.consultor_nome, placeholder="Ex.: Diogo Bracciali")
+            st.session_state.consultor_email = st.text_input("E-mail Corporativo:", value=st.session_state.consultor_email, placeholder="nome.sobrenome@camlinfs.com")
+            st.session_state.consultor_telefone = st.text_input("Telefone / WhatsApp:", value=st.session_state.consultor_telefone, placeholder="+55 (19) 99999-9999")
+        with col_cli:
+            st.subheader("🏢 Dados do Cliente")
+            st.session_state.cliente_nome = st.text_input("Nome da Empresa / Cliente:", value=st.session_state.cliente_nome, placeholder="Ex.: FVO Brasília")
+            st.session_state.cliente_cnpj = st.text_input("CNPJ:", value=st.session_state.cliente_cnpj, placeholder="00.000.000/0001-00")
+            st.session_state.cliente_contato = st.text_input("Responsável (A/C):", value=st.session_state.cliente_contato, placeholder="Ex.: Thiago Soares")
+            st.session_state.cliente_email = st.text_input("E-mail do Cliente:", value=st.session_state.cliente_email, placeholder="contato@empresa.com.br")
+
+        st.markdown("---")
+        st.subheader("🗂️ Histórico de Simulações Salvas na Sessão")
+        if st.button("💾 Salvar Simulação Atual no CRM", type="primary"):
+            if not st.session_state.cliente_nome.strip():
+                st.warning("Preencha o Nome da Empresa antes de salvar.")
+            else:
+                st.session_state.crm_historico.append({
+                    "Data/Hora": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                    "Consultor": st.session_state.consultor_nome.strip(),
+                    "Cliente": st.session_state.cliente_nome.strip(),
+                    "CNPJ": st.session_state.cliente_cnpj.strip(),
+                    "Contato": st.session_state.cliente_contato.strip(),
+                    "E-mail": st.session_state.cliente_email.strip(),
+                    "Ração (ton/mês)": fmt_br(st.session_state.volumes_producao["Fábrica de Ração"], 1),
+                    "MP FFO (ton/mês)": fmt_br(st.session_state.volumes_producao["Matéria-Prima Bruta FFO"], 1),
+                    "Itens na Cesta": len(st.session_state.cesta_aplicacao),
+                })
+                st.success(f"Simulação para '{st.session_state.cliente_nome}' salva no histórico.")
+
+        if st.session_state.crm_historico:
+            df_crm = pd.DataFrame(st.session_state.crm_historico)
+            st.dataframe(df_crm, use_container_width=True, hide_index=True)
+            st.download_button(
+                label="⬇️ Exportar Histórico CRM (CSV)",
+                data=df_crm.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"crm_simulacoes_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Nenhuma simulação salva nesta sessão ainda.")
+
+    elif modulo == "1. Balanço de Massa & Produção":
+        st.header("Etapa 1: Simulador de Produção e Balanço de Massa")
+        if st.session_state.cliente_nome:
+            st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome}")
+
+        opcoes_gatilho = ["Aves Abatidas", "Produção de Ração", "Matéria-Prima FFO Recebida"]
+        st.session_state.tipo_gatilho = st.radio(
+            "Qual dado de partida você tem?",
+            opcoes_gatilho,
+            index=opcoes_gatilho.index(st.session_state.tipo_gatilho),
+            horizontal=True,
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🎯 Entrada do Gatilho Principal")
+            if st.session_state.tipo_gatilho == "Aves Abatidas":
+                st.session_state.aves_dia = input_numero_br(
+                    "Abate Diário (aves/dia):",
+                    value=float(st.session_state.aves_dia),
+                    key="in_aves_dia",
+                    casas=0,
+                    min_value=1.0,
+                )
+                st.session_state.dias_mes = input_inteiro_br(
+                    "Dias de Operação / Mês:",
+                    value=int(st.session_state.dias_mes),
+                    key="in_dias_mes",
+                    min_value=1,
+                    max_value=31,
+                )
+            elif st.session_state.tipo_gatilho == "Produção de Ração":
+                st.session_state.racao_input = input_numero_br(
+                    "Volume de Ração Produzida (ton/mês):",
+                    value=float(st.session_state.racao_input),
+                    key="in_racao",
+                    casas=1,
+                    min_value=1.0,
+                )
+            else:
+                st.session_state.mp_input = input_numero_br(
+                    "Matéria-Prima Bruta Recebida na FFO (ton/mês):",
+                    value=float(st.session_state.mp_input),
+                    key="in_mp",
+                    casas=1,
+                    min_value=1.0,
+                )
+
+        with col2:
+            st.subheader("⚙️ Índices Zootécnicos e Industriais")
+            p_c1, p_c2 = st.columns(2)
+            with p_c1:
+                st.session_state.consumo_ave = input_numero_br(
+                    "Consumo Ração/Ave (kg):",
+                    value=float(st.session_state.consumo_ave),
+                    key="in_consumo_ave",
+                    casas=2,
+                    min_value=0.1,
+                    obs="Consumo total de ração pela ave até o abate.",
+                )
+                st.session_state.peso_ave = input_numero_br(
+                    "Peso Vivo Médio (kg):",
+                    value=float(st.session_state.peso_ave),
+                    key="in_peso_ave",
+                    casas=2,
+                    min_value=0.1,
+                    obs="Peso vivo médio da ave no momento do abate.",
+                )
+                st.session_state.rend_mp_pv = input_numero_br(
+                    "Rendimento MP s/ PV (%):",
+                    value=float(st.session_state.rend_mp_pv),
+                    key="in_rend_mp_pv",
+                    casas=2,
+                    min_value=1.0,
+                    obs="Proporção do PV que é destinado na forma de matéria-prima para FFO.",
+                )
+            with p_c2:
+                st.session_state.rend_fv = input_numero_br(
+                    "Rendimento FV s/ MP (%):",
+                    value=float(st.session_state.rend_fv),
+                    key="in_rend_fv",
+                    casas=2,
+                    min_value=1.0,
+                    obs="Proporção da MP que é convertida em farinha de vísceras.",
+                )
+                st.session_state.rend_fps = input_numero_br(
+                    "Rendimento FPS s/ MP (%):",
+                    value=float(st.session_state.rend_fps),
+                    key="in_rend_fps",
+                    casas=2,
+                    min_value=1.0,
+                    obs="Proporção da MP que é convertida em farinha de penas e sangue.",
+                )
+                st.session_state.rend_oleo = input_numero_br(
+                    "Rendimento Óleo s/ MP (%):",
+                    value=float(st.session_state.rend_oleo),
+                    key="in_rend_oleo",
+                    casas=2,
+                    min_value=1.0,
+                    obs="Proporção da MP que é convertida em óleo de aves.",
+                )
+
+        atualizar_balanco_na_sessao()
+        vols = st.session_state.volumes_producao
+
+        st.markdown("---")
+        st.success(f"📊 **Painel de Volumes Estimados (Equivalente a {fmt_br(st.session_state.aves_mes_calc, 0)} aves/mês):**")
+        m1, m2, m3, m4, m5 = st.columns(
