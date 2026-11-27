@@ -1,10 +1,12 @@
 import hmac
-from datetime import datetime
+import os
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
+from fpdf import FPDF
 
 # =============================================================================
 # CONFIGURAÇÃO DA PÁGINA E CONSTANTES
@@ -19,6 +21,7 @@ st.set_page_config(
 SHEET_ID = "1zTclMBgggOlYfrwRQRIRvSVAVOHUdOVPA4EB1VopcHI"
 ABA_PRODUTOS = "Produtos"
 ABA_GARANTIAS = "Garantias_Ativos"
+LOGO_PATH = "logo_cfs.png"
 
 COLUNAS_PRODUTOS = [
     "id_produto",
@@ -41,8 +44,6 @@ COLUNAS_GARANTIAS = [
     "unidade",
 ]
 
-# Pares de dupla declaração: (ativo_a_excluir_da_soma, ativo_principal_mantido)
-# Evita somar sal + ácido equivalente ou polímero + nitrogênio analítico no total de ppm.
 PARES_DUPLA_DECLARACAO: List[Tuple[str, str]] = [
     ("Propionato de Cálcio", "Ácido Propiônico"),
     ("Formiato de Cálcio", "Ácido Fórmico"),
@@ -154,15 +155,27 @@ def carregar_base_normalizada() -> Tuple[pd.DataFrame, pd.DataFrame, str, Option
 
 
 # =============================================================================
-# CAMADA DE DOMÍNIO (REGRAS DE NEGÓCIO E CÁLCULOS)
+# CAMADA DE DOMÍNIO (REGRAS DE NEGÓCIO, FORMATAÇÃO E PDF)
 # =============================================================================
+def fmt_br(valor: float, casas: int = 2) -> str:
+    """Formata número no padrão brasileiro (ex.: 1.200,50)."""
+    texto = f"{valor:,.{casas}f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def pdf_safe(texto: Any) -> str:
+    """Converte texto para Latin-1 seguro para fontes padrão do FPDF."""
+    s = str(texto or "").replace("—", "-").replace("–", "-").replace("•", "-")
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
 def formatar_valor_garantia(valor: float, unidade: str) -> str:
     if pd.isna(valor):
         return "-"
     if unidade.upper() == "UFC/G":
         return f"{valor:.1e} {unidade}"
     if unidade.lower() == "mg/kg":
-        return f"{valor:,.0f} {unidade}"
+        return f"{fmt_br(float(valor), 0)} {unidade}"
     return f"{valor:.2f}%".replace(".00%", "%").replace(".", ",")
 
 
@@ -181,9 +194,23 @@ def formatar_resumo_garantias_df(grupo: pd.DataFrame) -> str:
     return " | ".join(partes)
 
 
-def ordenar_portfolio(df: pd.DataFrame) -> pd.DataFrame:
-    """Ordena o portfólio priorizando AnOx/Xtendra, Novamold, Salplus, Dresbond e Outros."""
+def resumo_curto_ativo_pdf(id_produto: str, df_garantias: pd.DataFrame) -> str:
+    """Gera descrição curta de ativos para parênteses na proposta (ex.: BHT 98%)."""
+    gar = df_garantias[df_garantias["id_produto"] == id_produto]
+    if gar.empty:
+        return ""
+    partes: List[str] = []
+    for _, row in gar.iterrows():
+        ativo = str(row.get("ativo_padronizado", "")).strip()
+        val = row.get("valor_numerico")
+        unidade = str(row.get("unidade", "")).strip()
+        if not ativo or pd.isna(val):
+            continue
+        partes.append(f"{ativo} {formatar_valor_garantia(float(val), unidade)}")
+    return ", ".join(partes[:3])
 
+
+def ordenar_portfolio(df: pd.DataFrame) -> pd.DataFrame:
     def peso_ordem(row: pd.Series) -> int:
         texto = f"{row.get('linha', '')} {row.get('categoria', '')} {row.get('produto', '')}".lower()
         if "xtendra" in texto or "anox" in texto or "nasure" in texto:
@@ -207,12 +234,6 @@ def calcular_entrega_ativos(
     dosagem_g_ton: float,
     df_garantias: pd.DataFrame,
 ) -> Dict[str, Any]:
-    """
-    Calcula a entrega por molécula a partir da aba Garantias_Ativos.
-    - '%'     -> ppm (mg/kg) = dosagem_g_ton * (valor_numerico / 100)
-    - 'mg/kg' -> ppm (mg/kg) = dosagem_g_ton * (valor_numerico / 1_000_000)
-    - 'UFC/g' -> UFC/g de substrato = (dosagem_g_ton * valor_numerico) / 1_000_000
-    """
     gar_prod = df_garantias[df_garantias["id_produto"] == id_produto]
     if gar_prod.empty or dosagem_g_ton <= 0:
         return {
@@ -291,7 +312,6 @@ def calcular_balanco_massa(
     rend_fps: float,
     rend_oleo: float,
 ) -> Tuple[float, Dict[str, float]]:
-    """Calcula volumes industriais mensais (ton/mês) com proteção contra divisão por zero."""
     if tipo_gatilho == "Aves Abatidas":
         aves_mes = max(aves_dia, 0.0) * max(dias_mes, 0)
         racao_calc = (aves_mes * consumo_ave) / 1000.0
@@ -316,45 +336,228 @@ def calcular_balanco_massa(
     return aves_mes, volumes
 
 
-def gerar_texto_proposta(
+class PropostaCFSPDF(FPDF):
+    def footer(self) -> None:
+        self.set_y(-24)
+        self.set_draw_color(210, 215, 220)
+        self.line(15, self.get_y(), 195, self.get_y())
+        self.ln(3)
+        y_base = self.get_y()
+
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(100, 110, 120)
+        self.set_xy(15, y_base + 3)
+        self.cell(100, 5, "BRINGING SCIENCE TO EVERYDAY LIFE", ln=0)
+
+        if os.path.exists(LOGO_PATH):
+            try:
+                self.image(LOGO_PATH, x=155, y=y_base, w=40)
+                return
+            except Exception:
+                pass
+
+        self.set_xy(125, y_base + 1)
+        self.set_font("Helvetica", "B", 11)
+        self.set_text_color(0, 74, 153)
+        self.cell(70, 5, "CFS  Camlin Fine Sciences", align="R", ln=1)
+
+
+def gerar_pdf_proposta(
+    consultor_nome: str,
+    consultor_email: str,
+    consultor_telefone: str,
     cliente_nome: str,
     cliente_cnpj: str,
     cliente_contato: str,
-    linhas_financeiro: List[Dict[str, Any]],
-    vol_faturado_total: float,
-    fat_mensal_total: float,
-    fat_anual_total: float,
-) -> str:
-    linhas = [
-        "# PROPOSTA COMERCIAL - SOLUÇÕES EM NUTRIÇÃO ANIMAL",
-        "---",
-        f"**Cliente:** {cliente_nome or 'Não especificado'}",
-        f"**CNPJ:** {cliente_cnpj or 'N/A'}",
-        f"**Contato Responsável:** {cliente_contato or 'N/A'}",
-        f"**Data de Emissão:** {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        "",
-        "## Resumo da Cesta de Tratamento e Investimento (US$)",
-    ]
-    for lf in linhas_financeiro:
-        linhas.append(
-            f"- **Produto:** {lf['Produto']} ({lf['Matriz']}) | "
-            f"**Dosagem:** {lf['Dosagem (g/ton)']} g/ton | "
-            f"**Entrega:** {lf['Entrega por Molécula']} | "
-            f"**Obs:** {lf['Observação'] or 'N/A'} | "
-            f"**Preço:** US$ {lf['Preço Unitário (US$/kg)']:,.2f}/kg | "
-            f"**Custo/ton:** US$ {lf['Custo Tratamento (US$/ton)']:,.2f} | "
-            f"**Faturamento Mensal:** US$ {lf['Faturamento Mensal (US$)']:,.2f}"
-        )
-    linhas.extend(
-        [
-            "",
-            "---",
-            f"- **Volume Mensal Estimado (com Share):** {vol_faturado_total:,.1f} kg/mês",
-            f"- **Faturamento Mensal Total Estimado:** US$ {fat_mensal_total:,.2f}",
-            f"- **Potencial Anualizado:** US$ {fat_anual_total:,.2f}",
+    cliente_email: str,
+    incoterm: str,
+    destino: str,
+    expedicao_dias: int,
+    validade_str: str,
+    pagamento: str,
+    obs_gerais: str,
+    modo_tecnico: bool,
+    linhas_proposta: List[Dict[str, Any]],
+) -> bytes:
+    """Gera o PDF da Proposta Comercial no padrão executivo CFS (sem totalização em USD)."""
+    pdf = PropostaCFSPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=28)
+    pdf.set_margins(15, 16, 15)
+    pdf.add_page()
+
+    # Cabeçalho superior
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(15, 35, 65)
+    pdf.cell(120, 9, pdf_safe("Proposta Comercial"), ln=0)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(90, 95, 105)
+    pdf.cell(60, 9, pdf_safe(f"Emissão: {datetime.now().strftime('%d/%m/%Y')}"), align="R", ln=1)
+
+    pdf.set_draw_color(0, 74, 153)
+    pdf.set_line_width(0.6)
+    pdf.line(15, pdf.get_y() + 1, 195, pdf.get_y() + 1)
+    pdf.ln(7)
+
+    # Blocos FORNECEDOR e CLIENTE lado a lado
+    y_info = pdf.get_y()
+
+    # Fornecedor (Esquerda)
+    pdf.set_xy(15, y_info)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(0, 74, 153)
+    pdf.cell(85, 5, "FORNECEDOR", ln=1)
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(85, 5, pdf_safe(consultor_nome or "Consultor CFS"), ln=1)
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    contato_forn = " | ".join([x for x in [consultor_email, consultor_telefone] if x.strip()])
+    pdf.multi_cell(85, 4.5, pdf_safe(contato_forn or "Camlin Fine Sciences"))
+    y_fim_forn = pdf.get_y()
+
+    # Cliente (Direita)
+    pdf.set_xy(105, y_info)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(0, 74, 153)
+    pdf.cell(90, 5, "CLIENTE", ln=1)
+    pdf.set_x(105)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(90, 5, pdf_safe(cliente_nome or "Não especificado"), ln=1)
+    pdf.set_x(105)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    linha_ac_partes = []
+    if cliente_contato.strip():
+        linha_ac_partes.append(f"A/C: {cliente_contato.strip()}")
+    if cliente_email.strip():
+        linha_ac_partes.append(cliente_email.strip())
+    if cliente_cnpj.strip():
+        linha_ac_partes.append(f"CNPJ: {cliente_cnpj.strip()}")
+    pdf.multi_cell(90, 4.5, pdf_safe(" | ".join(linha_ac_partes) or "-"))
+    y_fim_cli = pdf.get_y()
+
+    pdf.set_y(max(y_fim_forn, y_fim_cli) + 8)
+
+    # Tabela de Produtos
+    col_preco = f"Preço {incoterm}"
+    if modo_tecnico:
+        headers = [
+            "Produto / Descrição",
+            "Dosagem",
+            "Qtd. mensal",
+            col_preco,
+            "Custo/ton",
+            "Observação / Aplicação",
         ]
-    )
-    return "\n".join(linhas)
+        widths = [50, 20, 24, 24, 22, 40]
+        aligns = ["L", "C", "R", "R", "R", "L"]
+    else:
+        headers = [
+            "Produto / Descrição",
+            "Quantidade mensal",
+            col_preco,
+            "Observação / Aplicação",
+        ]
+        widths = [64, 32, 32, 52]
+        aligns = ["L", "R", "R", "L"]
+
+    # Cabeçalho da tabela
+    pdf.set_fill_color(15, 35, 65)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8.5)
+    for h, w, al in zip(headers, widths, aligns):
+        pdf.cell(w, 8, pdf_safe(h), border=0, align=al, fill=True)
+    pdf.ln()
+
+    # Linhas da tabela (com quebra automática de texto)
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_draw_color(220, 225, 230)
+    pdf.set_line_width(0.25)
+
+    for idx_row, lp in enumerate(linhas_proposta):
+        desc_prod = lp["produto_pdf"]
+        qtd_str = f"{fmt_br(lp['qtd_mensal'], 0)} kg"
+        preco_str = f"USD {fmt_br(lp['preco_kg'], 2)}/kg"
+        obs_str = lp["obs_pdf"] or "-"
+
+        if modo_tecnico:
+            valores = [
+                desc_prod,
+                f"{fmt_br(lp['dosagem'], 0)} g/t",
+                qtd_str,
+                preco_str,
+                f"USD {fmt_br(lp['custo_ton'], 2)}",
+                obs_str,
+            ]
+        else:
+            valores = [desc_prod, qtd_str, preco_str, obs_str]
+
+        # Calcula altura necessária da linha
+        line_h = 5.0
+        max_lines = 1
+        for val_txt, w in zip(valores, widths):
+            linhas_calc = pdf.multi_cell(w - 2, line_h, pdf_safe(val_txt), split_only=True)
+            max_lines = max(max_lines, len(linhas_calc))
+        row_h = max(8.0, max_lines * line_h + 2.5)
+
+        if pdf.get_y() + row_h > 265:
+            pdf.add_page()
+
+        x_start = 15.0
+        y_start = pdf.get_y()
+        fill_row = idx_row % 2 == 1
+        if fill_row:
+            pdf.set_fill_color(246, 248, 251)
+            pdf.rect(x_start, y_start, sum(widths), row_h, style="F")
+
+        cur_x = x_start
+        for val_txt, w, al in zip(valores, widths, aligns):
+            pdf.set_xy(cur_x + 1, y_start + 1.2)
+            pdf.multi_cell(w - 2, line_h, pdf_safe(val_txt), border=0, align=al)
+            cur_x += w
+
+        pdf.line(x_start, y_start + row_h, x_start + sum(widths), y_start + row_h)
+        pdf.set_y(y_start + row_h)
+
+    pdf.ln(8)
+
+    # Bloco de Condições Comerciais
+    pdf.set_font("Helvetica", "B", 9.5)
+    pdf.set_text_color(15, 35, 65)
+    pdf.cell(0, 6, pdf_safe("Condições Comerciais"), ln=1)
+    pdf.ln(1)
+
+    incoterm_full = f"{incoterm} - {destino}" if destino.strip() else incoterm
+    condicoes = [
+        ("Incoterm:", incoterm_full),
+        ("Expedição:", f"{expedicao_dias} dias úteis"),
+        ("Validade da proposta:", validade_str),
+        ("Pagamento:", pagamento),
+    ]
+    for rotulo, valor in condicoes:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(50, 55, 65)
+        pdf.cell(42, 5.5, pdf_safe(rotulo), ln=0)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(30, 30, 30)
+        pdf.cell(0, 5.5, pdf_safe(valor), ln=1)
+
+    if obs_gerais.strip():
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.set_text_color(70, 75, 85)
+        pdf.cell(0, 5, pdf_safe("Observações Gerais:"), ln=1)
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_text_color(60, 60, 60)
+        pdf.multi_cell(0, 4.5, pdf_safe(obs_gerais.strip()))
+
+    saida = pdf.output()
+    return bytes(saida) if isinstance(saida, (bytes, bytearray)) else saida.encode("latin-1")
 
 
 # =============================================================================
@@ -362,9 +565,13 @@ def gerar_texto_proposta(
 # =============================================================================
 def inicializar_sessao(lista_produtos: List[str]) -> None:
     defaults: Dict[str, Any] = {
+        "consultor_nome": "",
+        "consultor_email": "",
+        "consultor_telefone": "",
         "cliente_nome": "",
         "cliente_cnpj": "",
         "cliente_contato": "",
+        "cliente_email": "",
         "tipo_gatilho": "Aves Abatidas",
         "aves_dia": 50000.0,
         "dias_mes": 25,
@@ -378,6 +585,12 @@ def inicializar_sessao(lista_produtos: List[str]) -> None:
         "rend_oleo": 12.67,
         "next_id": 3,
         "crm_historico": [],
+        "incoterm": "CIF",
+        "destino": "",
+        "expedicao_dias": 5,
+        "validade_proposta": date.today() + timedelta(days=30),
+        "pagamento": "30 dias",
+        "obs_gerais_pdf": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -475,10 +688,10 @@ def main() -> None:
         modulo = st.radio(
             "Selecione a Etapa:",
             [
-                "0. Cadastro do Cliente & CRM",
+                "0. Cadastro do Cliente & Consultor",
                 "1. Balanço de Massa & Produção",
                 "2. Consulta de FT & Cesta de Tratamento",
-                "3. Simulação de Faturamento & Relatório Executivo (US$)",
+                "3. Simulação de Faturamento & Proposta PDF (US$)",
             ],
         )
 
@@ -493,29 +706,51 @@ def main() -> None:
     atualizar_balanco_na_sessao()
 
     # -------------------------------------------------------------------------
-    # MÓDULO 0: CADASTRO DO CLIENTE & CRM
+    # MÓDULO 0: CADASTRO DO CLIENTE, CONSULTOR & CRM
     # -------------------------------------------------------------------------
-    if modulo == "0. Cadastro do Cliente & CRM":
-        st.header("Etapa 0: Identificação e Histórico do Cliente (Base CRM)")
-        st.markdown("Cadastre os dados da integração/fábrica para associar às simulações.")
+    if modulo == "0. Cadastro do Cliente & Consultor":
+        st.header("Etapa 0: Identificação do Consultor, Cliente e Histórico (CRM)")
 
-        c_col1, c_col2 = st.columns(2)
-        with c_col1:
+        col_forn, col_cli = st.columns(2)
+        with col_forn:
+            st.subheader("👔 Dados do Fornecedor (Consultor CFS)")
+            st.session_state.consultor_nome = st.text_input(
+                "Nome do Consultor:",
+                value=st.session_state.consultor_nome,
+                placeholder="Ex.: Diogo Bracciali",
+            )
+            st.session_state.consultor_email = st.text_input(
+                "E-mail Corporativo:",
+                value=st.session_state.consultor_email,
+                placeholder="nome.sobrenome@camlinfs.com",
+            )
+            st.session_state.consultor_telefone = st.text_input(
+                "Telefone / WhatsApp:",
+                value=st.session_state.consultor_telefone,
+                placeholder="+55 (19) 99999-9999",
+            )
+
+        with col_cli:
+            st.subheader("🏢 Dados do Cliente")
             st.session_state.cliente_nome = st.text_input(
                 "Nome da Empresa / Cliente:",
                 value=st.session_state.cliente_nome,
-                placeholder="Ex.: Integradora AgroAvícola Ltda",
+                placeholder="Ex.: FVO Brasília",
             )
             st.session_state.cliente_cnpj = st.text_input(
                 "CNPJ:",
                 value=st.session_state.cliente_cnpj,
                 placeholder="00.000.000/0001-00",
             )
-        with c_col2:
             st.session_state.cliente_contato = st.text_input(
-                "Responsável / Contato Técnico-Comercial:",
+                "Responsável (A/C):",
                 value=st.session_state.cliente_contato,
-                placeholder="Nome e cargo do nutricionista ou comprador",
+                placeholder="Ex.: Thiago Soares",
+            )
+            st.session_state.cliente_email = st.text_input(
+                "E-mail do Cliente:",
+                value=st.session_state.cliente_email,
+                placeholder="contato@empresa.com.br",
             )
 
         st.markdown("---")
@@ -527,9 +762,11 @@ def main() -> None:
                 st.session_state.crm_historico.append(
                     {
                         "Data/Hora": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        "Consultor": st.session_state.consultor_nome.strip(),
                         "Cliente": st.session_state.cliente_nome.strip(),
                         "CNPJ": st.session_state.cliente_cnpj.strip(),
                         "Contato": st.session_state.cliente_contato.strip(),
+                        "E-mail": st.session_state.cliente_email.strip(),
                         "Ração (ton/mês)": round(st.session_state.volumes_producao["Fábrica de Ração"], 1),
                         "MP FFO (ton/mês)": round(st.session_state.volumes_producao["Matéria-Prima Bruta FFO"], 1),
                         "Itens na Cesta": len(st.session_state.cesta_aplicacao),
@@ -853,10 +1090,10 @@ def main() -> None:
         st.success(f"📦 **Volume Físico Total Estimado na Conta:** {total_kg_geral:,.2f} kg / mês")
 
     # -------------------------------------------------------------------------
-    # MÓDULO 3: SIMULAÇÃO DE FATURAMENTO & RELATÓRIO EXECUTIVO (US$)
+    # MÓDULO 3: SIMULAÇÃO DE FATURAMENTO & PROPOSTA COMERCIAL EM PDF
     # -------------------------------------------------------------------------
-    elif modulo == "3. Simulação de Faturamento & Relatório Executivo (US$)":
-        st.header("Etapa 3: Simulador de Faturamento, Custo por Tonelada e Proposta Comercial (US$)")
+    elif modulo == "3. Simulação de Faturamento & Proposta PDF (US$)":
+        st.header("Etapa 3: Simulador de Faturamento e Proposta Comercial em PDF (US$)")
         if st.session_state.cliente_nome:
             st.info(
                 f"👤 **Cliente Ativo:** {st.session_state.cliente_nome} "
@@ -865,6 +1102,7 @@ def main() -> None:
 
         matrizes_opcoes = st.session_state.volumes_producao
         linhas_financeiro: List[Dict[str, Any]] = []
+        linhas_proposta_pdf: List[Dict[str, Any]] = []
 
         for idx, item in enumerate(st.session_state.cesta_aplicacao):
             vol_base = float(matrizes_opcoes.get(item["matriz"], 0.0))
@@ -872,7 +1110,9 @@ def main() -> None:
             consumo_kg_100 = (vol_base * dosagem) / 1000.0
 
             info_p = mapa_produtos.get(item["produto"], {})
-            entrega = calcular_entrega_ativos(str(info_p.get("id_produto", "")), dosagem, df_garantias)
+            id_prod = str(info_p.get("id_produto", ""))
+            entrega = calcular_entrega_ativos(id_prod, dosagem, df_garantias)
+            ativos_curto = resumo_curto_ativo_pdf(id_prod, df_garantias)
 
             c_fin1, c_fin2, c_fin3, c_fin4 = st.columns([3, 2, 2, 3])
             with c_fin1:
@@ -929,6 +1169,18 @@ def main() -> None:
                 }
             )
 
+            nome_pdf = f"{item['produto']} ({ativos_curto})" if ativos_curto else item["produto"]
+            linhas_proposta_pdf.append(
+                {
+                    "produto_pdf": nome_pdf,
+                    "dosagem": dosagem,
+                    "qtd_mensal": consumo_real_kg,
+                    "preco_kg": preco_kg,
+                    "custo_ton": custo_ton_tratada,
+                    "obs_pdf": item.get("observacao", "").strip() or item["matriz"],
+                }
+            )
+
         df_fin = pd.DataFrame(linhas_financeiro)
         st.subheader("💼 Resumo Executivo da Conta (US$)")
         st.dataframe(df_fin, use_container_width=True, hide_index=True)
@@ -943,30 +1195,86 @@ def main() -> None:
         r3.metric("Potencial Anualizado da Conta", f"US$ {fat_anual_total:,.2f}")
 
         st.markdown("---")
-        st.subheader("📄 Relatório Executivo / Proposta Comercial para Cliente")
-        texto_proposta = gerar_texto_proposta(
+        st.subheader("📄 Emissão de Proposta Comercial em PDF (Padrão CFS)")
+
+        modo_proposta = st.radio(
+            "Formato da Tabela no PDF:",
+            [
+                "Comercial Enxuta (Produto, Qtd., Preço, Observação)",
+                "Técnica-Comercial (+ Dosagem g/ton e Custo/ton USD)",
+            ],
+            horizontal=True,
+        )
+        eh_tecnico = modo_proposta.startswith("Técnica")
+
+        cond1, cond2, cond3, cond4 = st.columns([1.2, 2.3, 1.5, 1.8])
+        with cond1:
+            st.session_state.incoterm = st.selectbox(
+                "Incoterm:",
+                options=["CIF", "FOB"],
+                index=0 if st.session_state.incoterm == "CIF" else 1,
+            )
+        with cond2:
+            st.session_state.destino = st.text_input(
+                "Cidade / UF de Destino:",
+                value=st.session_state.destino,
+                placeholder="Ex.: Brasília/DF",
+            )
+        with cond3:
+            st.session_state.expedicao_dias = st.number_input(
+                "Expedição (dias úteis):",
+                min_value=1,
+                max_value=90,
+                value=int(st.session_state.expedicao_dias),
+                step=1,
+            )
+        with cond4:
+            st.session_state.validade_proposta = st.date_input(
+                "Validade da proposta:",
+                value=st.session_state.validade_proposta,
+                format="DD/MM/YYYY",
+            )
+
+        cond5, cond6 = st.columns([1.5, 3.5])
+        with cond5:
+            st.session_state.pagamento = st.text_input(
+                "Condição de Pagamento:",
+                value=st.session_state.pagamento,
+                placeholder="Ex.: 30 dias",
+            )
+        with cond6:
+            st.session_state.obs_gerais_pdf = st.text_input(
+                "Observações Gerais (opcional):",
+                value=st.session_state.obs_gerais_pdf,
+                placeholder="Ex.: Faturamento em BRL pela PTAX venda do dia anterior.",
+            )
+
+        pdf_bytes = gerar_pdf_proposta(
+            consultor_nome=st.session_state.consultor_nome,
+            consultor_email=st.session_state.consultor_email,
+            consultor_telefone=st.session_state.consultor_telefone,
             cliente_nome=st.session_state.cliente_nome,
             cliente_cnpj=st.session_state.cliente_cnpj,
             cliente_contato=st.session_state.cliente_contato,
-            linhas_financeiro=linhas_financeiro,
-            vol_faturado_total=vol_faturado_total,
-            fat_mensal_total=fat_mensal_total,
-            fat_anual_total=fat_anual_total,
+            cliente_email=st.session_state.cliente_email,
+            incoterm=st.session_state.incoterm,
+            destino=st.session_state.destino,
+            expedicao_dias=int(st.session_state.expedicao_dias),
+            validade_str=st.session_state.validade_proposta.strftime("%d/%m/%Y"),
+            pagamento=st.session_state.pagamento,
+            obs_gerais=st.session_state.obs_gerais_pdf,
+            modo_tecnico=eh_tecnico,
+            linhas_proposta=linhas_proposta_pdf,
         )
 
-        col_p1, col_p2 = st.columns([1, 1])
-        with col_p1:
-            mostrar_proposta = st.button("Gerar Proposta Comercial na Tela", type="primary")
-        with col_p2:
-            st.download_button(
-                label="⬇️ Baixar Proposta (.md)",
-                data=texto_proposta.encode("utf-8"),
-                file_name=f"proposta_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                mime="text/markdown",
-            )
-
-        if mostrar_proposta:
-            st.markdown(texto_proposta)
+        nome_arq_cli = (st.session_state.cliente_nome or "cliente").strip().replace(" ", "_")
+        st.download_button(
+            label="⬇️ Baixar Proposta Comercial (.PDF)",
+            data=pdf_bytes,
+            file_name=f"Proposta_Comercial_{nome_arq_cli}_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
 
 
 if __name__ == "__main__":
