@@ -102,4 +102,4 @@ def gerar_pdf_proposta(
     if cliente_cnpj.strip():
         linha_ac_partes.append(f"CNPJ: {cliente_cnpj.strip()}")
 texto_ac = " | ".join(linha_ac_partes) if linha_ac_partes else "-"
-    pdf.multi_cell(90, 4.5, pdf_safe(texto_ac))
+pdf.multi_cell(90, 4.5, pdf_safe(texto_ac))
