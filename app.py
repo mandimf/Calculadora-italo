@@ -820,58 +820,58 @@ def main() -> None:
                 )
 
         with col2:
-            st.subheader("⚙️ Índices Zootécnicos e Industriais")
-            p_c1, p_c2 = st.columns(2)
-            with p_c1:
-                st.session_state.consumo_ave = input_numero_br(
-                    "Consumo Ração/Ave (kg):",
-                    value=float(st.session_state.consumo_ave),
-                    key="in_consumo_ave",
-                    casas=2,
-                    min_value=0.1,
-                    obs="Consumo total de ração pela ave até o abate.",
-                )
-                st.session_state.peso_ave = input_numero_br(
-                    "Peso Vivo Médio (kg):",
-                    value=float(st.session_state.peso_ave),
-                    key="in_peso_ave",
-                    casas=2,
-                    min_value=0.1,
-                    obs="Peso vivo médio da ave no momento do abate.",
-                )
-                st.session_state.rend_mp_pv = input_numero_br(
-                    "Rendimento MP s/ PV (%):",
-                    value=float(st.session_state.rend_mp_pv),
-                    key="in_rend_mp_pv",
-                    casas=2,
-                    min_value=1.0,
-                    obs="Proporção do PV que é destinado na forma de matéria-prima para FFO.",
-                )
-            with p_c2:
-                st.session_state.rend_fv = input_numero_br(
-                    "Rendimento FV s/ MP (%):",
-                    value=float(st.session_state.rend_fv),
-                    key="in_rend_fv",
-                    casas=2,
-                    min_value=1.0,
-                    obs="Proporção da MP que é convertida em farinha de vísceras.",
-                )
-                st.session_state.rend_fps = input_numero_br(
-                    "Rendimento FPS s/ MP (%):",
-                    value=float(st.session_state.rend_fps),
-                    key="in_rend_fps",
-                    casas=2,
-                    min_value=1.0,
-                    obs="Proporção da MP que é convertida em farinha de penas e sangue.",
-                )
-                st.session_state.rend_oleo = input_numero_br(
-                    "Rendimento Óleo s/ MP (%):",
-                    value=float(st.session_state.rend_oleo),
-                    key="in_rend_oleo",
-                    casas=2,
-                    min_value=1.0,
-                    obs="Proporção da MP que é convertida em óleo de aves.",
-                )
+            with st.expander("⚙️ Índices Zootécnicos e Industriais", expanded=False):
+                p_c1, p_c2 = st.columns(2)
+                with p_c1:
+                    st.session_state.consumo_ave = input_numero_br(
+                        "Consumo Ração/Ave (kg):",
+                        value=float(st.session_state.consumo_ave),
+                        key="in_consumo_ave",
+                        casas=2,
+                        min_value=0.1,
+                        obs="Consumo total de ração pela ave até o abate.",
+                    )
+                    st.session_state.peso_ave = input_numero_br(
+                        "Peso Vivo Médio (kg):",
+                        value=float(st.session_state.peso_ave),
+                        key="in_peso_ave",
+                        casas=2,
+                        min_value=0.1,
+                        obs="Peso vivo médio da ave no momento do abate.",
+                    )
+                    st.session_state.rend_mp_pv = input_numero_br(
+                        "Rendimento MP s/ PV (%):",
+                        value=float(st.session_state.rend_mp_pv),
+                        key="in_rend_mp_pv",
+                        casas=2,
+                        min_value=1.0,
+                        obs="Proporção do PV que é destinado na forma de matéria-prima para FFO.",
+                    )
+                with p_c2:
+                    st.session_state.rend_fv = input_numero_br(
+                        "Rendimento FV s/ MP (%):",
+                        value=float(st.session_state.rend_fv),
+                        key="in_rend_fv",
+                        casas=2,
+                        min_value=1.0,
+                        obs="Proporção da MP que é convertida em farinha de vísceras.",
+                    )
+                    st.session_state.rend_fps = input_numero_br(
+                        "Rendimento FPS s/ MP (%):",
+                        value=float(st.session_state.rend_fps),
+                        key="in_rend_fps",
+                        casas=2,
+                        min_value=1.0,
+                        obs="Proporção da MP que é convertida em farinha de penas e sangue.",
+                    )
+                    st.session_state.rend_oleo = input_numero_br(
+                        "Rendimento Óleo s/ MP (%):",
+                        value=float(st.session_state.rend_oleo),
+                        key="in_rend_oleo",
+                        casas=2,
+                        min_value=1.0,
+                        obs="Proporção da MP que é convertida em óleo de aves.",
+                    )
 
         atualizar_balanco_na_sessao()
         vols = st.session_state.volumes_producao
