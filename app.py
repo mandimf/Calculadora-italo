@@ -350,6 +350,7 @@ def calcular_balanco_massa(
         mp_calc = ((aves_mes * peso_ave) * (rend_mp_pv / 100.0)) / 1000.0
     elif tipo_gatilho == "Produção de Ração":
         racao_calc = max(racao_input, 0.0)
-        aves_mes = (racao_calc * 1000.0) / consumo
-   if __name__ == "__main__":
-        main()
+        aves_mes = (racao_calc * 1000.0) / consumo_ave if consumo_ave > 0 else 0.0
+
+if __name__ == "__main__":
+    main()
