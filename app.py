@@ -321,7 +321,7 @@ def calcular_entrega_ativos(
         ppm_sinergistas = 0.0
 
     return {
-        "detalhe_texto": " | ".join(detalhes) if detalhes else "Não aplicável (%)",
+        "detalhe_texto": "\n".join(detalhes) if detalhes else "Não aplicável (%)",
         "ppm_primarios": ppm_primarios,
         "ppm_sinergistas": ppm_sinergistas,
         "tem_ppm": tem_ppm,
@@ -602,18 +602,18 @@ def inicializar_sessao(lista_produtos: List[str]) -> None:
                 "id": 1,
                 "matriz": "Farinha de Vísceras (FV)",
                 "produto": prod_inicial,
-                "dosagem": 0.5,
-                "observacao": "Aplicação primária no fluxo",
-                "preco_kg": 15.0,
+                "dosagem": 0.0,
+                "observacao": "",
+                "preco_kg": 0.0,
                 "share": 100,
             },
             {
                 "id": 2,
                 "matriz": "Óleo de Frango",
                 "produto": prod_inicial,
-                "dosagem": 1.0,
-                "observacao": "Estabilização lipídica",
-                "preco_kg": 18.0,
+                "dosagem": 0.0,
+                "observacao": "",
+                "preco_kg": 0.0,
                 "share": 100,
             },
         ]
@@ -917,7 +917,7 @@ def main() -> None:
                     ids_validos &= ids_com_ativo
                 df_ft_view = df_ft_view[df_ft_view["id_produto"].isin(ids_validos)]
 
-            colunas_exibicao = ["categoria", "produto", "estado_fisico", "garantias_resumo", "limite_regulatorio", "composicao", "ft_revisao", "ft_data"]
+            colunas_exibicao = ["categoria", "produto", "estado_fisico", "garantias_resumo", "composicao", "ft_revisao", "ft_data"]
             if df_ft_view.empty:
                 st.warning("Nenhum produto encontrado com a combinação de filtros selecionada.")
             else:
@@ -927,7 +927,6 @@ def main() -> None:
                         "produto": "Produto",
                         "estado_fisico": "Estado Físico",
                         "garantias_resumo": "Garantias Declaradas",
-                        "limite_regulatorio": "Limite Regulatório",
                         "composicao": "Composição (Referência)",
                         "ft_revisao": "Revisão FT",
                         "ft_data": "Data FT",
@@ -962,7 +961,12 @@ def main() -> None:
                     min_value=0.0,
                 )
             with c4:
-                item["observacao"] = st.text_input(f"Observação #{idx + 1}:", value=str(item.get("observacao", "")), key=f"obs_{item['id']}")
+                item["observacao"] = st.text_input(
+                    f"Observação #{idx + 1}:",
+                    value=str(item.get("observacao", "")),
+                    placeholder="Ex.: Ponto de dosagem, qual linha, especificidade, etc.",
+                    key=f"obs_{item['id']}",
+                )
             with c5:
                 st.write("")
                 st.write("")
@@ -982,12 +986,16 @@ def main() -> None:
             id_prod = str(info_p.get("id_produto", ""))
             est_fisico = str(info_p.get("estado_fisico", ""))
             comp_str = str(info_p.get("composicao", ""))
-            limite_reg = str(info_p.get("limite_regulatorio", ""))
             rev_ft = str(info_p.get("ft_revisao", ""))
             entrega = calcular_entrega_ativos(id_prod, float(item["dosagem"]), df_garantias)
+            detalhe_linhas_caption = entrega["detalhe_texto"].replace("\n", "  \n")
 
             nota_dupla = f" *(Nota: {entrega['observacao_dupla']})*" if entrega["observacao_dupla"] else ""
-            st.caption(f"📌 **{item['produto']} ({est_fisico} | {rev_ft})** | **Entrega:** {entrega['detalhe_texto']}{nota_dupla} | **Limite Reg.:** {limite_reg} | **Composição:** {comp_str}")
+            st.caption(
+                f"📌 **{item['produto']} ({est_fisico} | {rev_ft})** | **Entrega:**  \n"
+                f"{detalhe_linhas_caption}{nota_dupla}  \n"
+                f"**Composição:** {comp_str}"
+            )
             st.markdown("---")
 
             resumo_cesta.append({
@@ -1020,9 +1028,9 @@ def main() -> None:
                 "id": st.session_state.next_id,
                 "matriz": "Fábrica de Ração",
                 "produto": lista_produtos[0] if lista_produtos else "",
-                "dosagem": 0.5,
+                "dosagem": 0.0,
                 "observacao": "",
-                "preco_kg": 15.0,
+                "preco_kg": 0.0,
                 "share": 100,
             })
             st.session_state.next_id += 1
@@ -1055,15 +1063,19 @@ def main() -> None:
             id_prod = str(info_p.get("id_produto", ""))
             entrega = calcular_entrega_ativos(id_prod, dosagem, df_garantias)
             ativos_curto = resumo_curto_ativo_pdf(id_prod, df_garantias)
+            detalhe_linhas_caption = entrega["detalhe_texto"].replace("\n", "  \n")
 
             c_fin1, c_fin2, c_fin3, c_fin4 = st.columns([3, 2, 2, 3])
             with c_fin1:
                 st.markdown(f"**{idx + 1}. {item['produto']}** *(em {item['matriz']})*")
-                st.caption(f"Dosagem: {fmt_br(dosagem, 2)} kg/ton | {entrega['detalhe_texto']} | Obs: {item.get('observacao') or 'N/A'}")
+                st.caption(
+                    f"Dosagem: {fmt_br(dosagem, 2)} kg/ton | Obs: {item.get('observacao') or 'N/A'}  \n"
+                    f"{detalhe_linhas_caption}"
+                )
             with c_fin2:
                 item["preco_kg"] = input_numero_br(
                     f"Preço US$/kg (#{idx + 1}):",
-                    value=float(item.get("preco_kg", 15.0)),
+                    value=float(item.get("preco_kg", 0.0)),
                     key=f"preco_{item['id']}",
                     casas=2,
                     min_value=0.0,
