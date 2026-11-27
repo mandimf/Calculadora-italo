@@ -637,28 +637,32 @@ def atualizar_balanco_na_sessao() -> None:
     st.session_state.volumes_producao = volumes
 
 
+def _ir_para_etapa(destino_etapa: str) -> None:
+    st.session_state["nav_etapa"] = destino_etapa
+
+
 def renderizar_setas_navegacao(indice_atual: int) -> None:
     st.markdown("---")
     col_ant, _, col_prox = st.columns([1.6, 2.8, 1.6])
     with col_ant:
         if indice_atual > 0:
-            if st.button(
+            st.button(
                 "⬅️ Etapa Anterior",
                 key=f"nav_ant_{indice_atual}",
                 use_container_width=True,
-            ):
-                st.session_state["nav_etapa"] = ETAPAS_NAVEGACAO[indice_atual - 1]
-                st.rerun()
+                on_click=_ir_para_etapa,
+                args=(ETAPAS_NAVEGACAO[indice_atual - 1],),
+            )
     with col_prox:
         if indice_atual < len(ETAPAS_NAVEGACAO) - 1:
-            if st.button(
+            st.button(
                 "Próxima Etapa ➡️",
                 key=f"nav_prox_{indice_atual}",
                 type="primary",
                 use_container_width=True,
-            ):
-                st.session_state["nav_etapa"] = ETAPAS_NAVEGACAO[indice_atual + 1]
-                st.rerun()
+                on_click=_ir_para_etapa,
+                args=(ETAPAS_NAVEGACAO[indice_atual + 1],),
+            )
 
 
 def autenticar_usuario() -> bool:
