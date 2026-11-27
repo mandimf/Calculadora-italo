@@ -843,4 +843,308 @@ def main() -> None:
 
         st.markdown("---")
         st.success(f"📊 **Painel de Volumes Estimados (Equivalente a {fmt_br(st.session_state.aves_mes_calc, 0)} aves/mês):**")
-        m1, m2, m3, m4, m5 = st.columns(
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Ração Produzida", f"{fmt_br(vols['Fábrica de Ração'], 1)} ton")
+        m2.metric("Matéria-Prima FFO", f"{fmt_br(vols['Matéria-Prima Bruta FFO'], 1)} ton")
+        m3.metric("Farinha Vísceras (FV)", f"{fmt_br(vols['Farinha de Vísceras (FV)'], 1)} ton")
+        m4.metric("Farinha Penas (FPS)", f"{fmt_br(vols['Farinha de Penas (FPS)'], 1)} ton")
+        m5.metric("Óleo de Frango", f"{fmt_br(vols['Óleo de Frango'], 1)} ton")
+
+    elif modulo == "2. Consulta de FT & Cesta de Tratamento":
+        st.header("Etapa 2: Portfólio de FTs & Cesta de Tratamento Multi-Ponto")
+        if st.session_state.cliente_nome:
+            st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome}")
+
+        with st.expander("🔍 Consultar Catálogo e Filtrar por Princípio Ativo (Match Direto)", expanded=True):
+            cat_disp = sorted(df_produtos["categoria"].dropna().unique().tolist())
+            est_disp = sorted(df_produtos["estado_fisico"].dropna().unique().tolist())
+            ativos_disp = sorted(df_garantias["ativo_padronizado"].dropna().unique().tolist())
+
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                f_cat = st.multiselect("Categoria:", options=cat_disp, default=cat_disp)
+            with col_f2:
+                f_est = st.multiselect("Estado Físico:", options=est_disp, default=est_disp)
+            with col_f3:
+                f_ativos = st.multiselect("Conter Princípio(s) Ativo(s):", options=ativos_disp)
+
+            df_ft_view = df_produtos.copy()
+            if f_cat:
+                df_ft_view = df_ft_view[df_ft_view["categoria"].isin(f_cat)]
+            if f_est:
+                df_ft_view = df_ft_view[df_ft_view["estado_fisico"].isin(f_est)]
+            if f_ativos:
+                ids_validos = set(df_ft_view["id_produto"].tolist())
+                for atv in f_ativos:
+                    ids_com_ativo = set(df_garantias.loc[df_garantias["ativo_padronizado"] == atv, "id_produto"].tolist())
+                    ids_validos &= ids_com_ativo
+                df_ft_view = df_ft_view[df_ft_view["id_produto"].isin(ids_validos)]
+
+            colunas_exibicao = ["categoria", "produto", "estado_fisico", "garantias_resumo", "limite_regulatorio", "composicao", "ft_revisao", "ft_data"]
+            if df_ft_view.empty:
+                st.warning("Nenhum produto encontrado com a combinação de filtros selecionada.")
+            else:
+                st.dataframe(
+                    df_ft_view[colunas_exibicao].rename(columns={
+                        "categoria": "Categoria",
+                        "produto": "Produto",
+                        "estado_fisico": "Estado Físico",
+                        "garantias_resumo": "Garantias Declaradas",
+                        "limite_regulatorio": "Limite Regulatório",
+                        "composicao": "Composição (Referência)",
+                        "ft_revisao": "Revisão FT",
+                        "ft_data": "Data FT",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        st.markdown("---")
+        st.subheader("🛒 Cesta de Tratamento (Múltiplos Pontos de Aplicação)")
+        matrizes_opcoes = st.session_state.volumes_producao
+        itens_para_remover: List[int] = []
+        itens_para_duplicar: List[Dict[str, Any]] = []
+        resumo_cesta: List[Dict[str, Any]] = []
+        total_kg_geral = 0.0
+
+        for idx, item in enumerate(st.session_state.cesta_aplicacao):
+            c1, c2, c3, c4, c5, c6 = st.columns([2.2, 2.8, 1.5, 2.5, 1.0, 0.6])
+            with c1:
+                lista_mat = list(matrizes_opcoes.keys())
+                mat_idx = lista_mat.index(item["matriz"]) if item["matriz"] in lista_mat else 0
+                item["matriz"] = st.selectbox(f"Matriz #{idx + 1}:", options=lista_mat, index=mat_idx, key=f"matriz_{item['id']}")
+            with c2:
+                prod_idx = lista_produtos.index(item["produto"]) if item["produto"] in lista_produtos else 0
+                item["produto"] = st.selectbox(f"Produto #{idx + 1}:", options=lista_produtos, index=prod_idx, key=f"prod_{item['id']}")
+            with c3:
+                item["dosagem"] = input_numero_br(
+                    f"g/ton #{idx + 1}:",
+                    value=float(item["dosagem"]),
+                    key=f"dose_{item['id']}",
+                    casas=1,
+                    min_value=0.0,
+                )
+            with c4:
+                item["observacao"] = st.text_input(f"Observação #{idx + 1}:", value=str(item.get("observacao", "")), key=f"obs_{item['id']}")
+            with c5:
+                st.write("")
+                st.write("")
+                if st.button("➕ Dup", key=f"dup_{item['id']}", use_container_width=True):
+                    itens_para_duplicar.append(item.copy())
+            with c6:
+                st.write("")
+                st.write("")
+                if len(st.session_state.cesta_aplicacao) > 1:
+                    if st.button("🗑️", key=f"del_{item['id']}", use_container_width=True):
+                        itens_para_remover.append(item["id"])
+
+            vol_base = float(matrizes_opcoes.get(item["matriz"], 0.0))
+            consumo_linha_kg = (vol_base * float(item["dosagem"])) / 1000.0
+            total_kg_geral += consumo_linha_kg
+            info_p = mapa_produtos.get(item["produto"], {})
+            id_prod = str(info_p.get("id_produto", ""))
+            est_fisico = str(info_p.get("estado_fisico", ""))
+            comp_str = str(info_p.get("composicao", ""))
+            limite_reg = str(info_p.get("limite_regulatorio", ""))
+            rev_ft = str(info_p.get("ft_revisao", ""))
+            entrega = calcular_entrega_ativos(id_prod, float(item["dosagem"]), df_garantias)
+
+            nota_dupla = f" *(Nota: {entrega['observacao_dupla']})*" if entrega["observacao_dupla"] else ""
+            st.caption(f"📌 **{item['produto']} ({est_fisico} | {rev_ft})** | **Entrega:** {entrega['detalhe_texto']}{nota_dupla} | **Limite Reg.:** {limite_reg} | **Composição:** {comp_str}")
+            st.markdown("---")
+
+            resumo_cesta.append({
+                "Ponto": idx + 1,
+                "Matriz Aplicada": item["matriz"],
+                "Volume Matriz (ton/mês)": fmt_br(vol_base, 1),
+                "Produto Comercial": item["produto"],
+                "Estado Físico": est_fisico,
+                "Dosagem (g/ton)": fmt_br(float(item["dosagem"]), 1),
+                "Entrega por Molécula": entrega["detalhe_texto"],
+                "Ativos Primários (ppm)": fmt_br(entrega["ppm_primarios"], 2) if entrega["tem_ppm"] else "N/A",
+                "Observação": item["observacao"],
+                "Consumo Mensal (kg)": fmt_br(consumo_linha_kg, 2),
+            })
+
+        if itens_para_duplicar:
+            for it in itens_para_duplicar:
+                novo_item = it.copy()
+                novo_item["id"] = st.session_state.next_id
+                st.session_state.cesta_aplicacao.append(novo_item)
+                st.session_state.next_id += 1
+            st.rerun()
+
+        if itens_para_remover:
+            st.session_state.cesta_aplicacao = [it for it in st.session_state.cesta_aplicacao if it["id"] not in itens_para_remover]
+            st.rerun()
+
+        if st.button("➕ Adicionar Nova Linha de Tratamento"):
+            st.session_state.cesta_aplicacao.append({
+                "id": st.session_state.next_id,
+                "matriz": "Fábrica de Ração",
+                "produto": lista_produtos[0] if lista_produtos else "",
+                "dosagem": 500.0,
+                "observacao": "",
+                "preco_kg": 15.0,
+                "share": 100,
+            })
+            st.session_state.next_id += 1
+            st.rerun()
+
+        df_resumo = pd.DataFrame(resumo_cesta)
+        st.subheader("📋 Quadro Consolidado de Consumo e Entrega em ppm")
+        st.dataframe(df_resumo, use_container_width=True, hide_index=True)
+        st.success(f"📦 **Volume Físico Total Estimado na Conta:** {fmt_br(total_kg_geral, 2)} kg / mês")
+
+    elif modulo == "3. Simulação de Faturamento & Proposta PDF (US$)":
+        st.header("Etapa 3: Simulador de Faturamento e Proposta Comercial em PDF (US$)")
+        if st.session_state.cliente_nome:
+            st.info(f"👤 **Cliente Ativo:** {st.session_state.cliente_nome} (CNPJ: {st.session_state.cliente_cnpj or 'N/A'})")
+
+        matrizes_opcoes = st.session_state.volumes_producao
+        linhas_financeiro: List[Dict[str, Any]] = []
+        linhas_proposta_pdf: List[Dict[str, Any]] = []
+        fat_mensal_total = 0.0
+        fat_anual_total = 0.0
+        vol_faturado_total = 0.0
+
+        for idx, item in enumerate(st.session_state.cesta_aplicacao):
+            vol_base = float(matrizes_opcoes.get(item["matriz"], 0.0))
+            dosagem = float(item["dosagem"])
+            consumo_kg_100 = (vol_base * dosagem) / 1000.0
+            info_p = mapa_produtos.get(item["produto"], {})
+            id_prod = str(info_p.get("id_produto", ""))
+            entrega = calcular_entrega_ativos(id_prod, dosagem, df_garantias)
+            ativos_curto = resumo_curto_ativo_pdf(id_prod, df_garantias)
+
+            c_fin1, c_fin2, c_fin3, c_fin4 = st.columns([3, 2, 2, 3])
+            with c_fin1:
+                st.markdown(f"**{idx + 1}. {item['produto']}** *(em {item['matriz']})*")
+                st.caption(f"Dosagem: {fmt_br(dosagem, 0)} g/ton | {entrega['detalhe_texto']} | Obs: {item.get('observacao') or 'N/A'}")
+            with c_fin2:
+                item["preco_kg"] = input_numero_br(
+                    f"Preço US$/kg (#{idx + 1}):",
+                    value=float(item.get("preco_kg", 15.0)),
+                    key=f"preco_{item['id']}",
+                    casas=2,
+                    min_value=0.0,
+                )
+            with c_fin3:
+                item["share"] = st.slider(f"Share % (#{idx + 1}):", min_value=10, max_value=100, value=int(item.get("share", 100)), step=10, key=f"share_{item['id']}")
+
+            preco_kg = float(item["preco_kg"])
+            share = int(item["share"])
+            consumo_real_kg = consumo_kg_100 * (share / 100.0)
+            faturamento_item = consumo_real_kg * preco_kg
+            custo_ton_tratada = (dosagem / 1000.0) * preco_kg
+
+            vol_faturado_total += consumo_real_kg
+            fat_mensal_total += faturamento_item
+            fat_anual_total += faturamento_item * 12.0
+
+            with c_fin4:
+                st.metric(
+                    label=f"Faturamento Item #{idx + 1}",
+                    value=f"US$ {fmt_br(faturamento_item, 2)} /mês",
+                    delta=f"Custo Tratamento: US$ {fmt_br(custo_ton_tratada, 2)} /ton",
+                )
+            st.markdown("---")
+
+            linhas_financeiro.append({
+                "Matriz": item["matriz"],
+                "Produto": item["produto"],
+                "Dosagem (g/ton)": fmt_br(dosagem, 1),
+                "Entrega por Molécula": entrega["detalhe_texto"],
+                "Observação": item.get("observacao", ""),
+                "Custo Tratamento (US$/ton)": fmt_br(custo_ton_tratada, 2),
+                "Share (%)": f"{share}%",
+                "Volume Faturado (kg/mês)": fmt_br(consumo_real_kg, 2),
+                "Preço Unitário (US$/kg)": fmt_br(preco_kg, 2),
+                "Faturamento Mensal (US$)": fmt_br(faturamento_item, 2),
+                "Faturamento Anual (US$)": fmt_br(faturamento_item * 12.0, 2),
+            })
+
+            nome_pdf = f"{item['produto']} ({ativos_curto})" if ativos_curto else item["produto"]
+            linhas_proposta_pdf.append({
+                "produto_pdf": nome_pdf,
+                "dosagem": dosagem,
+                "qtd_mensal": consumo_real_kg,
+                "preco_kg": preco_kg,
+                "custo_ton": custo_ton_tratada,
+                "obs_pdf": item.get("observacao", "").strip() or item["matriz"],
+            })
+
+        df_fin = pd.DataFrame(linhas_financeiro)
+        st.subheader("💼 Resumo Executivo da Conta (US$)")
+        st.dataframe(df_fin, use_container_width=True, hide_index=True)
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Volume Total Faturado (com Share)", f"{fmt_br(vol_faturado_total, 1)} kg/mês")
+        r2.metric("Faturamento Mensal Consolidado", f"US$ {fmt_br(fat_mensal_total, 2)}")
+        r3.metric("Potencial Anualizado da Conta", f"US$ {fmt_br(fat_anual_total, 2)}")
+
+        st.markdown("---")
+        st.subheader("📄 Emissão de Proposta Comercial em PDF (Padrão CFS)")
+
+        modo_proposta = st.radio(
+            "Formato da Tabela no PDF:",
+            [
+                "Comercial Enxuta (Produto, Qtd., Preço, Observação)",
+                "Técnica-Comercial (+ Dosagem g/ton e Custo/ton USD)",
+            ],
+            horizontal=True,
+        )
+        eh_tecnico = modo_proposta.startswith("Técnica")
+
+        cond1, cond2, cond3, cond4 = st.columns([1.2, 2.3, 1.5, 1.8])
+        with cond1:
+            st.session_state.incoterm = st.selectbox("Incoterm:", options=["CIF", "FOB"], index=0 if st.session_state.incoterm == "CIF" else 1)
+        with cond2:
+            st.session_state.destino = st.text_input("Cidade / UF de Destino:", value=st.session_state.destino, placeholder="Ex.: Brasília/DF")
+        with cond3:
+            st.session_state.expedicao_dias = input_inteiro_br(
+                "Expedição (dias úteis):",
+                value=int(st.session_state.expedicao_dias),
+                key="in_expedicao_dias",
+                min_value=1,
+                max_value=90,
+            )
+        with cond4:
+            st.session_state.validade_proposta = st.date_input("Validade da proposta:", value=st.session_state.validade_proposta, format="DD/MM/YYYY")
+
+        cond5, cond6 = st.columns([1.5, 3.5])
+        with cond5:
+            st.session_state.pagamento = st.text_input("Condição de Pagamento:", value=st.session_state.pagamento, placeholder="Ex.: 30 dias")
+        with cond6:
+            st.session_state.obs_gerais_pdf = st.text_input("Observações Gerais (opcional):", value=st.session_state.obs_gerais_pdf, placeholder="Ex.: Faturamento em BRL pela PTAX venda do dia anterior.")
+
+        pdf_bytes = gerar_pdf_proposta(
+            consultor_nome=st.session_state.consultor_nome,
+            consultor_email=st.session_state.consultor_email,
+            consultor_telefone=st.session_state.consultor_telefone,
+            cliente_nome=st.session_state.cliente_nome,
+            cliente_cnpj=st.session_state.cliente_cnpj,
+            cliente_contato=st.session_state.cliente_contato,
+            cliente_email=st.session_state.cliente_email,
+            incoterm=st.session_state.incoterm,
+            destino=st.session_state.destino,
+            expedicao_dias=int(st.session_state.expedicao_dias),
+            validade_str=st.session_state.validade_proposta.strftime("%d/%m/%Y"),
+            pagamento=st.session_state.pagamento,
+            obs_gerais=st.session_state.obs_gerais_pdf,
+            modo_tecnico=eh_tecnico,
+            linhas_proposta=linhas_proposta_pdf,
+        )
+
+        nome_arq_cli = (st.session_state.cliente_nome or "cliente").strip().replace(" ", "_")
+        st.download_button(
+            label="⬇️ Baixar Proposta Comercial (.PDF)",
+            data=pdf_bytes,
+            file_name=f"Proposta_Comercial_{nome_arq_cli}_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
+
+
+if __name__ == "__main__":
+    main()
